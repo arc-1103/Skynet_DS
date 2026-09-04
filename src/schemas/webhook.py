@@ -29,3 +29,24 @@ class GitHubWebhookEvent(BaseModel):
     pull_request: Optional[WebhookPR] = None
     repository: RepositoryRef
     sender: WebhookUser
+
+
+class DeploymentRef(BaseModel):
+    sha: str = Field(..., description="Commit SHA that was deployed")
+    ref: str = Field(..., description="Git ref (branch/tag) that was deployed")
+    environment: str = Field(default="production", description="Deployment target environment")
+
+
+class DeploymentStatusRef(BaseModel):
+    state: str = Field(..., description="'pending', 'success', 'failure', 'error', etc.")
+
+
+class GitHubDeploymentStatusEvent(BaseModel):
+    """Parses a GitHub 'deployment_status' webhook payload - the trigger for
+    Workflow 4 (Deployment Regression Triage) per Workflow.md."""
+
+    action: Optional[str] = None
+    deployment: DeploymentRef
+    deployment_status: DeploymentStatusRef
+    repository: RepositoryRef
+    sender: WebhookUser
