@@ -1,0 +1,51 @@
+# --- Web API & Async Framework ---
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.9.0
+pydantic-settings>=2.5.0
+httpx>=0.27.0
+python-multipart>=0.0.12
+
+# --- Distributed Queue & Task Execution ---
+celery>=5.4.0
+redis>=5.1.0
+
+# --- Database & Persistence ---
+sqlalchemy>=2.0.35
+asyncpg>=0.29.0
+alembic>=1.13.3
+
+# --- LLM Providers & Multi-Agent Orchestration ---
+langgraph>=0.2.20
+langchain-core>=0.3.0
+groq>=0.11.0
+google-genai>=0.1.1
+instructor>=1.4.0
+
+# --- Statistical ML, Drift & Root Cause Engine ---
+numpy>=1.26.0
+pandas>=2.2.0
+scipy>=1.13.0
+scikit-learn>=1.5.0
+evidently>=0.4.30
+shap>=0.46.0
+
+# --- MLOps & Experiment Tracking ---
+mlflow-skinny>=2.16.0
+
+# --- Observability & Metrics ---
+langfuse>=2.50.0
+prometheus-client>=0.21.0
+
+# --- Code Parsing & Version Control ---
+unidiff>=0.7.5
+PyGithub>=2.4.0
+tree-sitter>=0.23.0
+tree-sitter-language-pack>=0.2.0
+
+# --- Environment & Testing ---
+python-dotenv>=1.0.1
+pytest>=8.3.0
+pytest-asyncio>=0.24.0
+pytest-mock>=3.14.0
+ruff>=0.6.5
