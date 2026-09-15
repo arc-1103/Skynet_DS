@@ -41,7 +41,7 @@ def test_hypothesize_config_lowers_confidence_for_multiple_changes():
 
     candidate = _hypothesize_config(current, baseline)
 
-    assert candidate.confidence = 0.6
+    assert candidate.confidence == 0.6
 
 
 def test_hypothesize_config_no_change_returns_none():

@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.db
+Architecture.md/
+BluePrint.md/
+PRD.md/
+Execution.md/

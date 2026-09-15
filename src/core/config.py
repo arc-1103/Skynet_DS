@@ -13,3 +13,8 @@ class Settings:
 
 
 settings = Settings()
+
+
+def get_settings() -> Settings:
+    """FastAPI dependency provider - inject via Depends(get_settings)."""
+    return settings

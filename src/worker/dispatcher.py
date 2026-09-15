@@ -7,7 +7,7 @@ the process dies before it fires."""
 
 import asyncio
 import logging
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -16,16 +16,30 @@ class DelayedTaskQueue:
     def __init__(self) -> None:
         self._tasks: set[asyncio.Task] = set()
 
-    def schedule(self, coro_factory: Callable[[], Awaitable[None]], delay_seconds: float) -> None:
-        """Fire coro_factory() after delay_seconds, on the current event loop."""
-        task = asyncio.create_task(self._run_after_delay(coro_factory, delay_seconds))
+    def schedule(
+        self,
+        func: Callable[..., Awaitable[None]],
+        kwargs: dict[str, Any] | None = None,
+        *,
+        delay_seconds: float,
+    ) -> None:
+        """Fire func(**kwargs) after delay_seconds, on the current event loop.
+
+        Takes func + kwargs (not a closure) so the call shape matches a
+        Celery task.apply_async(kwargs=..., countdown=...) - a lambda isn't
+        picklable across a Celery/Redis broker, but a function reference and
+        a plain kwargs dict are.
+        """
+        task = asyncio.create_task(self._run_after_delay(func, kwargs or {}, delay_seconds))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _run_after_delay(self, coro_factory: Callable[[], Awaitable[None]], delay_seconds: float) -> None:
+    async def _run_after_delay(
+        self, func: Callable[..., Awaitable[None]], kwargs: dict[str, Any], delay_seconds: float
+    ) -> None:
         try:
             await asyncio.sleep(delay_seconds)
-            await coro_factory()
+            await func(**kwargs)
         except Exception:
             logger.exception("Delayed task failed")
 

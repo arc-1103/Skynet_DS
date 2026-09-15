@@ -6,7 +6,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api import webhooks
-from src.core.config import Settings
+from src.core.config import Settings, get_settings
 
 DEPLOYMENT_STATUS_SUCCESS = {
     "action": "created",
@@ -29,11 +29,16 @@ DEPLOYMENT_STATUS_PENDING = {
 @pytest.fixture
 def client(monkeypatch):
     scheduled = []
-    monkeypatch.setattr(webhooks.queue, "schedule", lambda fn, delay_seconds: scheduled.append((fn, delay_seconds)))
-    monkeypatch.setattr(webhooks, "settings", Settings(github_webhook_secret=None))
+    monkeypatch.setattr(
+        webhooks.queue,
+        "schedule",
+        lambda fn, kwargs=None, *, delay_seconds: scheduled.append((fn, kwargs, delay_seconds)),
+    )
+    webhooks.app.dependency_overrides[get_settings] = lambda: Settings(github_webhook_secret=None)
     test_client = TestClient(webhooks.app)
     test_client.scheduled = scheduled
-    return test_client
+    yield test_client
+    webhooks.app.dependency_overrides.clear()
 
 
 def test_ping_event_returns_ok(client):
@@ -56,7 +61,13 @@ def test_deployment_status_success_schedules_job(client):
     assert resp.status_code == 200
     assert resp.json()["scheduled"] is True
     assert len(client.scheduled) == 1
-    _, delay = client.scheduled[0]
+    fn, kwargs, delay = client.scheduled[0]
+    assert fn is webhooks.run_deployment_regression_check
+    assert kwargs == {
+        "repo_full_name": "acme/fraud-clf",
+        "deploy_sha": "abc123",
+        "environment": "production",
+    }
     assert delay == webhooks.POST_DEPLOY_CHECK_DELAY_SECONDS
 
 
@@ -91,19 +102,20 @@ def test_malformed_deployment_payload_returns_422(client):
 
 
 def test_signature_required_when_secret_configured(monkeypatch):
-    monkeypatch.setattr(webhooks, "settings", Settings(github_webhook_secret="topsecret"))
-    monkeypatch.setattr(webhooks.queue, "schedule", lambda fn, delay_seconds: None)
+    webhooks.app.dependency_overrides[get_settings] = lambda: Settings(github_webhook_secret="topsecret")
+    monkeypatch.setattr(webhooks.queue, "schedule", lambda fn, kwargs=None, *, delay_seconds: None)
     client = TestClient(webhooks.app)
 
     resp = client.post("/webhooks/github", json={"zen": "hi"}, headers={"X-GitHub-Event": "ping"})
 
     assert resp.status_code == 401
+    webhooks.app.dependency_overrides.clear()
 
 
 def test_valid_signature_is_accepted(monkeypatch):
     secret = "topsecret"
-    monkeypatch.setattr(webhooks, "settings", Settings(github_webhook_secret=secret))
-    monkeypatch.setattr(webhooks.queue, "schedule", lambda fn, delay_seconds: None)
+    webhooks.app.dependency_overrides[get_settings] = lambda: Settings(github_webhook_secret=secret)
+    monkeypatch.setattr(webhooks.queue, "schedule", lambda fn, kwargs=None, *, delay_seconds: None)
     client = TestClient(webhooks.app)
 
     body = json.dumps({"zen": "hi"}).encode()
@@ -120,11 +132,12 @@ def test_valid_signature_is_accepted(monkeypatch):
     )
 
     assert resp.status_code == 200
+    webhooks.app.dependency_overrides.clear()
 
 
 def test_invalid_signature_is_rejected(monkeypatch):
-    monkeypatch.setattr(webhooks, "settings", Settings(github_webhook_secret="topsecret"))
-    monkeypatch.setattr(webhooks.queue, "schedule", lambda fn, delay_seconds: None)
+    webhooks.app.dependency_overrides[get_settings] = lambda: Settings(github_webhook_secret="topsecret")
+    monkeypatch.setattr(webhooks.queue, "schedule", lambda fn, kwargs=None, *, delay_seconds: None)
     client = TestClient(webhooks.app)
 
     resp = client.post(
@@ -134,3 +147,4 @@ def test_invalid_signature_is_rejected(monkeypatch):
     )
 
     assert resp.status_code == 401
+    webhooks.app.dependency_overrides.clear()

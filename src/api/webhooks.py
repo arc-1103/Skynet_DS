@@ -6,12 +6,13 @@ worker/ - this endpoint should ack fast."""
 
 import hashlib
 import hmac
+import json
 import logging
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import ValidationError
 
-from src.core.config import settings
+from src.core.config import Settings, get_settings
 from src.schemas.webhook import GitHubDeploymentStatusEvent
 from src.worker.dispatcher import queue
 from src.worker.jobs import run_deployment_regression_check
@@ -38,6 +39,7 @@ async def github_webhook(
     request: Request,
     x_github_event: str | None = Header(default=None),
     x_hub_signature_256: str | None = Header(default=None),
+    settings: Settings = Depends(get_settings),
 ) -> dict:
     body = await request.body()
 
@@ -50,7 +52,10 @@ async def github_webhook(
     if x_github_event == "ping":
         return {"status": "ok", "event": "ping"}
 
-    payload = await request.json()
+    try:
+        payload = await request.json()
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail=f"Malformed JSON body: {exc}") from exc
 
     if x_github_event == "deployment_status":
         try:
@@ -65,11 +70,12 @@ async def github_webhook(
             }
 
         queue.schedule(
-            lambda: run_deployment_regression_check(
-                repo_full_name=event.repository.full_name,
-                deploy_sha=event.deployment.sha,
-                environment=event.deployment.environment,
-            ),
+            run_deployment_regression_check,
+            kwargs={
+                "repo_full_name": event.repository.full_name,
+                "deploy_sha": event.deployment.sha,
+                "environment": event.deployment.environment,
+            },
             delay_seconds=POST_DEPLOY_CHECK_DELAY_SECONDS,
         )
         return {"status": "accepted", "event": x_github_event, "scheduled": True}
