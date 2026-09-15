@@ -3,8 +3,10 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.db
+data/
 Architecture.md/
 BluePrint.md/
 PRD.md/
 Execution.md/
 Workflow.md/
+.env/
