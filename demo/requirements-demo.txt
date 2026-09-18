@@ -1,0 +1,10 @@
+# Extra dependencies for demo/ only - not needed by the core CLI
+# (src/cli.py) or the webhook path. Install with:
+#   pip install -r demo/requirements-demo.txt
+# on top of the project's main requirements.txt.
+
+evidently>=0.7.21
+langfuse>=2.53.0
+# Full langchain (not just langchain-core, already in requirements.txt)
+# is required by langfuse.langchain.CallbackHandler.
+langchain>=0.2.0

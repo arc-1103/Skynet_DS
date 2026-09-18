@@ -166,3 +166,79 @@ def compute_score(x):
 
     assert chunks[0].metadata["repo"] == "demo"
     assert chunks[0].metadata["chunk_type"] == "function"
+
+
+def test_chunk_file_chunks_a_function_nested_inside_a_function():
+    """A closure used to be absorbed into its parent's single chunk, so
+    find_symbol could no longer resolve it - a regression from the old
+    SemanticChunker, which recursed to any depth."""
+    source = """
+def train(model, loader):
+    def train_step(batch):
+        return model(batch)
+
+    for batch in loader:
+        train_step(batch)
+"""
+    chunks = PythonDSChunker().chunk_file("train.py", source)
+
+    by_name = {c.symbol_name: c for c in chunks}
+    assert "train.train_step" in by_name
+    assert by_name["train.train_step"].metadata["chunk_type"] == "nested_function"
+    assert by_name["train.train_step"].metadata["parent_symbol"] == "train"
+    assert "def train_step" in by_name["train.train_step"].content
+    # the parent is still chunked whole
+    assert "for batch in loader" in by_name["train"].content
+
+
+def test_chunk_file_chunks_nested_functions_at_any_depth():
+    source = """
+def outer():
+    def middle():
+        def inner():
+            return 1
+        return inner
+    return middle
+"""
+    chunks = PythonDSChunker().chunk_file("deep.py", source)
+
+    names = {c.symbol_name for c in chunks}
+    assert "outer.middle" in names
+    assert "outer.middle.inner" in names
+
+
+def test_chunk_file_chunks_a_closure_inside_a_method_of_a_split_class():
+    source = f'''
+class Trainer:
+    def run(self):
+        def step():
+            return 1
+        return step
+
+    def other(self):
+        """{_FILLER}"""
+'''
+    chunks = PythonDSChunker().chunk_file("trainer.py", source)
+
+    names = {c.symbol_name for c in chunks}
+    assert "Trainer.run" in names
+    assert "Trainer.run.step" in names
+
+
+def test_split_class_method_chunks_keep_the_class_decorator():
+    """header_line came from the inner class_definition, so a decorated large
+    class lost the @decorator that often identifies it - unlike the
+    whole-class chunk path, which includes it."""
+    source = f'''
+@register_model("resnet")
+class Net:
+    def forward(self, x):
+        return x
+
+    def helper(self):
+        """{_FILLER}"""
+'''
+    chunks = PythonDSChunker().chunk_file("net.py", source)
+
+    forward = next(c for c in chunks if c.symbol_name == "Net.forward")
+    assert forward.content.startswith('# Class Context: @register_model("resnet") class Net:')

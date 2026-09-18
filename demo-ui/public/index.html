@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Skynet_DS — Review Dashboard</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <div class="brand">
+        <span class="brand-mark">◎</span>
+        <span class="brand-name">Skynet_DS</span>
+      </div>
+      <h1 id="pr-title">Loading PR review…</h1>
+      <p id="pr-meta" class="hero-meta"></p>
+      <div class="labels" id="pr-labels"></div>
+    </div>
+    <div class="hero-status" id="pr-status">—</div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Findings <span class="count-pill" id="findings-count">0</span></h2>
+      <div class="findings" id="findings-list"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Data Drift — <span id="drift-label"></span></h2>
+      <p class="panel-sub" id="drift-summary"></p>
+      <div class="table-wrap">
+        <table class="drift-table" id="drift-table">
+          <thead>
+            <tr>
+              <th>Column</th>
+              <th>Kind</th>
+              <th>Verdict</th>
+              <th>Detectors</th>
+            </tr>
+          </thead>
+          <tbody id="drift-tbody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Root Cause — Feature Attribution</h2>
+      <p class="panel-sub" id="rootcause-summary"></p>
+      <div id="attribution-list" class="attributions"></div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Demo UI only — analysis runs in the Python core (<code>src/agents</code>, <code>src/drift</code>). Sample data shown.</p>
+  </footer>
+
+  <script src="/app.js"></script>
+</body>
+</html>

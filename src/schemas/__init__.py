@@ -3,7 +3,7 @@
 # NOTE: this package currently holds schemas for two different product
 # concepts that have not been reconciled - see Execution.md at the repo
 # root for the full flag:
-#   - pr.py, review.py, graph.py (PRReviewState), webhook.py, linter.py,
+#   - pr.py, review.py, graph.py, webhook.py, linter.py,
 #     rag.py: the PR-review-bot described in README.md (inline GitHub
 #     review comments for ML/DS performance anti-patterns).
 #   - telemetry.py: the "ML Reliability Copilot" (model-regression root
@@ -17,10 +17,18 @@
 from .pr import PRPayload, ChangedFile
 from .review import ReviewFinding, AgentReviewReport, FinalPRReview, Severity, PRLabel
 from .rag import CodeChunk, RetrievalResult
-from .graph import PRReviewState
-from .webhook import GitHubWebhookEvent, WebhookPR, GitHubDeploymentStatusEvent
+from .graph import AgentState
+from .webhook import GitHubPullRequestEvent, WebhookPR, GitHubDeploymentStatusEvent
 from .linter import LinterIssue, LinterReport
 from .telemetry import NormalizedRun
+from .drift import (
+    ColumnDriftReport,
+    ColumnKind,
+    DatasetDriftReport,
+    DriftMethod,
+    MethodResult,
+)
+from .root_cause import DriftRootCause, FeatureAttribution, ShiftDirection
 
 __all__ = [
     # PR & Diffs (PR-review-bot / potential github/ evidence source)
@@ -36,13 +44,23 @@ __all__ = [
     "CodeChunk",
     "RetrievalResult",
     # LangGraph State (PR-review-bot only)
-    "PRReviewState",
+    "AgentState",
     # Webhooks & Tools
-    "GitHubWebhookEvent",
+    "GitHubPullRequestEvent",
     "WebhookPR",
     "GitHubDeploymentStatusEvent",
     "LinterIssue",
     "LinterReport",
     # ML Reliability Copilot diagnostic core
     "NormalizedRun",
+    # Data drift (Workflow 2)
+    "DriftMethod",
+    "ColumnKind",
+    "MethodResult",
+    "ColumnDriftReport",
+    "DatasetDriftReport",
+    # SHAP root-cause attribution
+    "DriftRootCause",
+    "FeatureAttribution",
+    "ShiftDirection",
 ]

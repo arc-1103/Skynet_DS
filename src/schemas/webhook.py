@@ -1,5 +1,5 @@
 # webhook.py
-from typing import Any, Dict, Optional
+from typing import Optional
 from pydantic import BaseModel, Field
 
 
@@ -13,20 +13,29 @@ class WebhookUser(BaseModel):
     login: str = Field(...,description="GitHub handle")
 
 
+class CommitRef(BaseModel):
+    # Constrained because worker/jobs.py builds a cache filename out of this:
+    # a payload claiming sha="../../../../x" would otherwise write outside
+    # settings.pr_cache_dir, and signature verification is skipped entirely
+    # when GITHUB_WEBHOOK_SECRET is unset (src/core/config.py).
+    sha: str = Field(..., pattern=r"^[0-9a-fA-F]{4,64}$", description="Commit SHA")
+    ref: str = Field(..., description="Git ref (branch name)")
+
+
 class WebhookPR(BaseModel):
     number: int
     title: str
     body: Optional[str] = ""
     state: str
-    head: Dict[str, Any] = Field(...,description="Head commit metadata (sha, ref)")
-    base: Dict[str, Any] = Field(...,description="Base commit metadata")
+    head: CommitRef = Field(..., description="Head commit metadata (sha, ref)")
+    base: CommitRef = Field(..., description="Base commit metadata")
 
 
-class GitHubWebhookEvent(BaseModel):
-    """Parses raw HTTP POST body from /api/webhooks."""
+class GitHubPullRequestEvent(BaseModel):
+    """Parses a GitHub 'pull_request' webhook payload."""
     action: str = Field(..., description="'opened', 'synchronize', 'reopened', 'closed'")
-    number: Optional[int] = None
-    pull_request: Optional[WebhookPR] = None
+    number: int
+    pull_request: WebhookPR
     repository: RepositoryRef
     sender: WebhookUser
 

@@ -15,6 +15,10 @@ class PRPayload(BaseModel):
     pr_id: int = Field(..., description="Pull Request number")
     repo_full_name: str = Field(..., description="Repository slug, e.g. 'owner/repo'")
     commit_sha: str = Field(..., description="Head commit SHA for inline diff commenting")
+    base_sha: Optional[str] = Field(
+        None, description="Base commit SHA the PR targets - the 'before' side of any comparison"
+    )
+    base_ref: Optional[str] = Field(None, description="Base branch name, e.g. 'main'")
     author: str = Field(..., description="GitHub handle of the PR author")
     title: str = Field(..., description="Title of the Pull Request")
     body: Optional[str] = Field("", description="Description/body provided in the PR")

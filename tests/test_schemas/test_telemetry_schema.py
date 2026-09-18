@@ -36,12 +36,23 @@ def test_normalized_run_full_construction():
 
 
 def test_normalized_run_requires_run_id_model_id_timestamp():
-    with pytest.raises(ValidationError):
-        NormalizedRun(model_id="m1", timestamp=datetime.now(timezone.utc),run_id="r1")
-    with pytest.raises(ValidationError):
-        NormalizedRun(run_id="r1", timestamp=datetime.now(timezone.utc),model_id="m2")
-    with pytest.raises(ValidationError):
-        NormalizedRun(run_id="r1", model_id="m1",timestamp=datetime.now(timezone.utc))
+    # 1. Missing run_id
+    with pytest.raises(ValidationError) as exc_info:
+        NormalizedRun(model_id="m1", timestamp=datetime.now(timezone.utc))
+    # Unindented outside the 'with' block:
+    assert "run_id" in str(exc_info.value)
+
+    # 2. Missing model_id
+    with pytest.raises(ValidationError) as exc_info:
+        NormalizedRun(run_id="r1", timestamp=datetime.now(timezone.utc))
+    # Unindented outside the 'with' block:
+    assert "model_id" in str(exc_info.value)
+
+    # 3. Missing timestamp
+    with pytest.raises(ValidationError) as exc_info:
+        NormalizedRun(run_id="r1", model_id="m1")
+    # Unindented outside the 'with' block:
+    assert "timestamp" in str(exc_info.value)
 
 
 def test_normalized_run_json_roundtrip():

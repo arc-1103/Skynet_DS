@@ -1,4 +1,3 @@
-# src/api/webhooks.py
 """GitHub webhook receiver (Architecture.md api/: 'HTTP surface... Thin
 layer only - no business logic here'). Verifies the payload signature,
 routes by X-GitHub-Event, and hands anything that takes real work off to
@@ -13,9 +12,9 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import ValidationError
 
 from src.core.config import Settings, get_settings
-from src.schemas.webhook import GitHubDeploymentStatusEvent
+from src.schemas.webhook import GitHubDeploymentStatusEvent, GitHubPullRequestEvent
 from src.worker.dispatcher import queue
-from src.worker.jobs import run_deployment_regression_check
+from src.worker.jobs import run_deployment_regression_check, run_pr_code_review
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +31,63 @@ def _verify_signature(secret: str, payload: bytes, signature_header: str | None)
     expected = "sha256=" + hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(expected, signature_header):
         raise HTTPException(status_code=401, detail="Signature mismatch")
+
+
+def _validated(model, payload: dict):
+    """Parse a payload into its event model, turning a schema mismatch into
+    a 422 rather than a 500."""
+    try:
+        return model.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _ignored(event: str, reason: str) -> dict:
+    return {"status": "ignored", "event": event, "reason": reason}
+
+
+def _handle_deployment_status(event_name: str, payload: dict) -> dict:
+    event = _validated(GitHubDeploymentStatusEvent, payload)
+    if event.deployment_status.state != "success":
+        return _ignored(event_name, f"state={event.deployment_status.state}")
+
+    queue.schedule(
+        run_deployment_regression_check,
+        kwargs={
+            "repo_full_name": event.repository.full_name,
+            "deploy_sha": event.deployment.sha,
+            "environment": event.deployment.environment,
+        },
+        delay_seconds=POST_DEPLOY_CHECK_DELAY_SECONDS,
+    )
+    return {"status": "accepted", "event": event_name, "scheduled": True}
+
+
+def _handle_pull_request(event_name: str, payload: dict) -> dict:
+    event = _validated(GitHubPullRequestEvent, payload)
+    # Run on newly opened/reopened PRs or when new commits are pushed
+    if event.action not in {"opened", "reopened", "synchronize"}:
+        return _ignored(event_name, f"action={event.action}")
+
+    queue.schedule(
+        run_pr_code_review,
+        kwargs={
+            "repo_full_name": event.repository.full_name,
+            "pr_number": event.number,
+            "head_sha": event.pull_request.head.sha,
+        },
+        delay_seconds=0,  # PR reviews should run immediately
+    )
+    return {"status": "accepted", "event": event_name, "scheduled": True}
+
+
+# X-GitHub-Event -> handler. Adding an event is a line here plus its handler,
+# instead of another branch in an if/elif chain that repeats the whole
+# validate / check-condition / schedule / respond shape each time.
+_EVENT_HANDLERS = {
+    "deployment_status": _handle_deployment_status,
+    "pull_request": _handle_pull_request,
+}
 
 
 @app.post("/webhooks/github")
@@ -57,28 +113,9 @@ async def github_webhook(
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail=f"Malformed JSON body: {exc}") from exc
 
-    if x_github_event == "deployment_status":
-        try:
-            event = GitHubDeploymentStatusEvent.model_validate(payload)
-        except ValidationError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        if event.deployment_status.state != "success":
-            return {
-                "status": "ignored",
-                "event": x_github_event,
-                "reason": f"state={event.deployment_status.state}",
-            }
+    handler = _EVENT_HANDLERS.get(x_github_event)
+    if handler is None:
+        logger.info("Unhandled GitHub event type: %s", x_github_event)
+        return {"status": "ignored", "event": x_github_event}
 
-        queue.schedule(
-            run_deployment_regression_check,
-            kwargs={
-                "repo_full_name": event.repository.full_name,
-                "deploy_sha": event.deployment.sha,
-                "environment": event.deployment.environment,
-            },
-            delay_seconds=POST_DEPLOY_CHECK_DELAY_SECONDS,
-        )
-        return {"status": "accepted", "event": x_github_event, "scheduled": True}
-
-    logger.info("Unhandled GitHub event type: %s", x_github_event)
-    return {"status": "ignored", "event": x_github_event}
+    return handler(x_github_event, payload)

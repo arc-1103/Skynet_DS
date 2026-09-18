@@ -25,6 +25,27 @@ DEPLOYMENT_STATUS_PENDING = {
     "deployment_status": {"state": "pending"},
 }
 
+PULL_REQUEST_OPENED = {
+    "action": "opened",
+    "number": 42,
+    "pull_request": {
+        "number": 42,
+        "title": "Fix flaky test",
+        "body": "Closes #41",
+        "state": "open",
+        "head": {"sha": "deadbeef", "ref": "fix-flaky-test"},
+        "base": {"sha": "cafebabe", "ref": "main"},
+    },
+    "repository": {
+        "full_name": "acme/fraud-clf",
+        "clone_url": "https://github.com/acme/fraud-clf.git",
+        "default_branch": "main",
+    },
+    "sender": {"login": "octocat"},
+}
+
+PULL_REQUEST_CLOSED = {**PULL_REQUEST_OPENED, "action": "closed"}
+
 
 @pytest.fixture
 def client(monkeypatch):
@@ -76,6 +97,36 @@ def test_deployment_status_non_success_is_ignored(client):
         "/webhooks/github",
         json=DEPLOYMENT_STATUS_PENDING,
         headers={"X-GitHub-Event": "deployment_status"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ignored"
+    assert client.scheduled == []
+
+
+def test_pull_request_opened_schedules_job(client):
+    resp = client.post(
+        "/webhooks/github",
+        json=PULL_REQUEST_OPENED,
+        headers={"X-GitHub-Event": "pull_request"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["scheduled"] is True
+    assert len(client.scheduled) == 1
+    fn, kwargs, delay = client.scheduled[0]
+    assert fn is webhooks.run_pr_code_review
+    assert kwargs == {
+        "repo_full_name": "acme/fraud-clf",
+        "pr_number": 42,
+        "head_sha": "deadbeef",
+    }
+    assert delay == 0
+
+
+def test_pull_request_closed_is_ignored(client):
+    resp = client.post(
+        "/webhooks/github",
+        json=PULL_REQUEST_CLOSED,
+        headers={"X-GitHub-Event": "pull_request"},
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ignored"
@@ -148,3 +199,21 @@ def test_invalid_signature_is_rejected(monkeypatch):
 
     assert resp.status_code == 401
     webhooks.app.dependency_overrides.clear()
+
+
+def test_pull_request_with_a_path_traversal_sha_is_rejected(client):
+    """worker/jobs.py builds a cache filename out of head.sha, and signature
+    verification is skipped when no webhook secret is configured, so the sha
+    is constrained at the parse boundary."""
+    payload = {
+        **PULL_REQUEST_OPENED,
+        "pull_request": {
+            **PULL_REQUEST_OPENED["pull_request"],
+            "head": {"sha": "../../../../x", "ref": "evil"},
+        },
+    }
+    resp = client.post(
+        "/webhooks/github", json=payload, headers={"X-GitHub-Event": "pull_request"}
+    )
+    assert resp.status_code == 422
+    assert client.scheduled == []
