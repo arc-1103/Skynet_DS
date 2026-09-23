@@ -1,7 +1,10 @@
 from datetime import datetime, timezone
 
+import pytest
+
 from src.memory.sqlite_store import SQLiteStore
 from src.observability.fake_adapter import FakeTelemetryAdapter
+from src.retrieval import evidence
 from src.retrieval.evidence import EvidenceRetriever
 from src.schemas.telemetry import NormalizedRun
 
@@ -62,8 +65,66 @@ def test_get_code_diff_missing_ref_returns_none(tmp_path):
     assert retriever.get_code_diff("abc", None) is None
 
 
-def test_get_code_diff_different_refs_returns_stub_message(tmp_path):
+def test_get_code_diff_without_a_repo_labels_the_range(tmp_path):
     retriever = EvidenceRetriever(FakeTelemetryAdapter(), SQLiteStore(str(tmp_path / "m.db")))
     diff = retriever.get_code_diff("abc111", "abc123")
-    assert diff is not None
     assert "abc111..abc123" in diff
+    assert "no GITHUB_REPO" in diff
+
+
+def test_get_code_diff_fetches_from_github_when_a_repo_is_configured(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_fetch(repo, base, head, token):
+        calls.append((repo, base, head, token))
+        return "1 commit(s), 1 file(s) changed (+3/-1): train.py"
+
+    monkeypatch.setattr(evidence, "fetch_commit_diff", fake_fetch)
+    retriever = EvidenceRetriever(
+        FakeTelemetryAdapter(), SQLiteStore(str(tmp_path / "m.db")), "acme/models", "tok"
+    )
+
+    diff = retriever.get_code_diff("abc111", "abc123")
+
+    assert calls == [("acme/models", "abc111", "abc123", "tok")]
+    assert diff.endswith("train.py")
+
+
+def test_get_code_diff_fetch_failure_does_not_raise(tmp_path, monkeypatch):
+    def boom(*a):
+        raise ConnectionError("github down")
+
+    monkeypatch.setattr(evidence, "fetch_commit_diff", boom)
+    retriever = EvidenceRetriever(FakeTelemetryAdapter(), SQLiteStore(str(tmp_path / "m.db")), "acme/models")
+
+    assert retriever.get_code_diff("abc111", "abc123") == "commit range abc111..abc123, diff fetch failed"
+
+
+def test_get_pipeline_commits_distinguishes_unchecked_from_none_found(tmp_path, monkeypatch):
+    since = datetime.now(timezone.utc)
+    store = SQLiteStore(str(tmp_path / "m.db"))
+    monkeypatch.setattr(evidence, "fetch_path_commits", lambda repo, paths, since, token: [])
+
+    # no repo or no paths configured -> could not check
+    assert EvidenceRetriever(FakeTelemetryAdapter(), store).get_pipeline_commits(("etl/",), since) is None
+    assert EvidenceRetriever(FakeTelemetryAdapter(), store, "acme/m").get_pipeline_commits((), since) is None
+    # checked, nothing changed
+    assert EvidenceRetriever(FakeTelemetryAdapter(), store, "acme/m").get_pipeline_commits(("etl/",), since) == []
+
+    def boom(*a):
+        raise ConnectionError("github down")
+
+    monkeypatch.setattr(evidence, "fetch_path_commits", boom)
+    assert EvidenceRetriever(FakeTelemetryAdapter(), store, "acme/m").get_pipeline_commits(("etl/",), since) is None
+
+
+def test_get_code_diff_refuses_refs_that_are_not_shas(tmp_path, monkeypatch):
+    """code_ref comes from run metadata anyone logging a run controls; it
+    must not reach the GitHub compare URL unless it's a real SHA."""
+    monkeypatch.setattr(evidence, "fetch_commit_diff", lambda *a: pytest.fail("called GitHub"))
+    retriever = EvidenceRetriever(FakeTelemetryAdapter(), SQLiteStore(str(tmp_path / "m.db")), "acme/models")
+
+    assert retriever.get_code_diff("abc111", "../../../orgs/x") == (
+        "commit range abc111..../../../orgs/x, diff not fetched - refs are not commit SHAs"
+    )
+    assert "not commit SHAs" in retriever.get_code_diff("main", "abc123")

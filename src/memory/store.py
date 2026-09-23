@@ -2,7 +2,7 @@
 from typing import Protocol
 
 from src.graph.causal import CauseCandidate
-from src.schemas.telemetry import NormalizedRun
+from src.schemas.telemetry import FeatureSample, NormalizedRun
 
 
 class Store(Protocol):
@@ -15,3 +15,15 @@ class Store(Protocol):
     def save_diagnosis(self, model_id: str, verdict: CauseCandidate) -> None: ...
 
     def get_diagnosis_history(self, model_id: str) -> list[CauseCandidate]: ...
+
+    def get_baseline_distribution(self, model_id: str) -> FeatureSample | None: ...
+
+    def set_baseline_distribution(self, model_id: str, sample: FeatureSample) -> None: ...
+
+    def get_active_drift(self, model_id: str) -> str | None:
+        """Signature of the drift episode currently open for a model, if any."""
+        ...
+
+    def set_active_drift(self, model_id: str, signature: str | None) -> None:
+        """Open (signature) or close (None) a model's drift episode."""
+        ...

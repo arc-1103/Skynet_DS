@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import ValidationError
@@ -14,11 +15,24 @@ from pydantic import ValidationError
 from src.core.config import Settings, get_settings
 from src.schemas.webhook import GitHubDeploymentStatusEvent, GitHubPullRequestEvent
 from src.worker.dispatcher import queue
-from src.worker.jobs import run_deployment_regression_check, run_pr_code_review
+from src.worker.jobs import run_deployment_regression_check, run_monitoring_sweep, run_pr_code_review
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="ML Reliability Copilot - Webhook Receiver")
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    """Workflow 5: the always-on monitor lives in this process's worker
+    queue, started with the server. Off unless both a sweep period and a
+    Prometheus to read from are configured."""
+    settings = get_settings()
+    if settings.monitor_interval_seconds > 0 and settings.prometheus_url:
+        queue.schedule_every(run_monitoring_sweep, interval_seconds=settings.monitor_interval_seconds)
+        logger.info("monitoring sweep every %ss", settings.monitor_interval_seconds)
+    yield
+    queue.cancel_all()
+
+
+app = FastAPI(title="ML Reliability Copilot - Webhook Receiver", lifespan=_lifespan)
 
 # Wait this long post-deploy before checking metrics, per Workflow.md
 # Workflow 4 ("1hr post-deploy, enough data to compare").

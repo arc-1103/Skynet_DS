@@ -43,6 +43,32 @@ class DelayedTaskQueue:
         except Exception:
             logger.exception("Delayed task failed")
 
+    def schedule_every(
+        self,
+        func: Callable[..., Awaitable[None]],
+        kwargs: dict[str, Any] | None = None,
+        *,
+        interval_seconds: float,
+    ) -> None:
+        """Run func(**kwargs) every interval_seconds until the loop stops
+        (Workflow 5's always-on sweep). A failing run is logged and the next
+        one still fires - one bad sweep must not end monitoring."""
+        task = asyncio.create_task(self._run_every(func, kwargs or {}, interval_seconds))
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+
+    async def _run_every(
+        self, func: Callable[..., Awaitable[None]], kwargs: dict[str, Any], interval_seconds: float
+    ) -> None:
+        while True:
+            await self._run_after_delay(func, kwargs, interval_seconds)
+
+    def cancel_all(self) -> None:
+        """Stop every scheduled and recurring task (server shutdown). Pending
+        delayed jobs are dropped - the same loss as a process restart."""
+        for task in list(self._tasks):
+            task.cancel()
+
     def pending_count(self) -> int:
         return len(self._tasks)
 

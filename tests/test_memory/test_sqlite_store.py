@@ -69,3 +69,30 @@ def test_schema_persists_across_reconnect(tmp_path):
 
     store2 = SQLiteStore(db_path)
     assert store2.get_baseline("m1") is not None
+
+
+def test_baseline_distribution_roundtrips_and_upserts(tmp_path):
+    from src.schemas.telemetry import FeatureSample
+
+    store = SQLiteStore(str(tmp_path / "m.db"))
+    now = datetime.now(timezone.utc)
+    first = FeatureSample(model_id="m", start=now, end=now, features={"amount": [1.0, 2.0]})
+    second = FeatureSample(model_id="m", start=now, end=now, features={"amount": [3.0]})
+
+    assert store.get_baseline_distribution("m") is None
+    store.set_baseline_distribution("m", first)
+    assert store.get_baseline_distribution("m") == first
+    store.set_baseline_distribution("m", second)
+    assert store.get_baseline_distribution("m") == second
+    assert store.get_baseline_distribution("other") is None
+
+
+def test_active_drift_opens_and_closes(tmp_path):
+    store = SQLiteStore(str(tmp_path / "m.db"))
+    assert store.get_active_drift("m") is None
+    store.set_active_drift("m", "drift-features:age,amount")
+    assert store.get_active_drift("m") == "drift-features:age,amount"
+    assert store.get_active_drift("other") is None
+    store.set_active_drift("m", None)
+    assert store.get_active_drift("m") is None
+    store.set_active_drift("m", None)  # closing a closed episode is a no-op

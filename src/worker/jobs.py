@@ -1,43 +1,40 @@
 # src/worker/jobs.py
-"""Job bodies scheduled by worker/dispatcher.py. Wires Workflow 4
-(Deployment Regression Triage, Workflow.md) into the diagnostic core built
-in agents/orchestrator.py."""
+"""Job bodies scheduled by worker/dispatcher.py. Wires Workflow 2 (drift),
+Workflow 4 (Deployment Regression Triage), Workflow 5 (the monitoring
+sweep) and the PR-review graph into the diagnostic core built in agents/."""
 
 import asyncio
 import logging
 import re
 import subprocess
+from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from src.agents.multi_agent_graph import run_pr_review
-from src.agents.orchestrator import diagnose
+from src.api.notify import notify_slack
+from src.agents.orchestrator import diagnose, diagnose_drift, drift_signature
 from src.core.config import settings
+from src.drift.detector import detect_dataset_drift
 from src.drift.pr_drift import data_files_in_pr
+from src.drift.tables import frame_from_features
 from src.github_integration.pr_client import fetch_pr
 from src.github_integration.repo_client import clone_or_checkout
 from src.memory.sqlite_store import SQLiteStore
-from src.observability.fake_adapter import FakeTelemetryAdapter
+from src.observability.base import build_adapter
+from src.observability.prometheus_adapter import PrometheusAdapter
 from src.retrieval.evidence import EvidenceRetriever
+from src.schemas.webhook import SHA_PATTERN
 
 logger = logging.getLogger(__name__)
 
-# TODO(Phase 1, BluePrint.md section 5): there is no real mapping yet from a
-# GitHub repo/deployment environment to a model_id/run_id in observability/,
-# and no real MLflow/W&B adapter - both are open decisions the user hasn't
-# made. Until then this job resolves against the fake adapter's one seeded
-# model so the webhook -> async dispatch -> diagnose wiring can be exercised
-# end-to-end; it does not check anything real yet.
-_STUB_MODEL_ID = "fraud-clf"
-
-# Anything used to build a filename has to be a plain hex ref - a webhook
-# payload can claim any `sha` it likes, including "../../../../x".
-_SHA = re.compile(r"[0-9a-fA-F]{4,64}")
+# Anything used to build a filename has to be a plain hex ref.
+_SHA = re.compile(SHA_PATTERN)
 
 
 async def run_deployment_regression_check(repo_full_name: str, deploy_sha: str, environment: str) -> None:
-    """Workflow 4 steps 2-5: fetch post-deploy metrics, compare to baseline,
-    rank causes scoped to the deploy. Currently runs against fake data - see
-    the TODO above.
+    """Workflow 4 steps 2-5: fetch the model's latest run, compare to its
+    baseline, rank causes scoped to the deploy's commit range.
 
     Every job body here is synchronous (GitHub REST calls, `git clone`,
     pandas/sklearn) and these coroutines are scheduled onto the API
@@ -51,23 +48,124 @@ async def run_deployment_regression_check(repo_full_name: str, deploy_sha: str, 
 
 
 def _run_deployment_regression_check(repo_full_name: str, deploy_sha: str, environment: str) -> None:
-    logger.info(
-        "deployment regression check: repo=%s sha=%s env=%s (stubbed against fake adapter)",
-        repo_full_name,
-        deploy_sha,
-        environment,
-    )
-    adapter = FakeTelemetryAdapter()
-    store = SQLiteStore(settings.memory_db_path)
-    retriever = EvidenceRetriever(adapter, store)
-
-    recent = retriever.get_recent_runs(_STUB_MODEL_ID, limit=1)
-    if not recent:
-        logger.warning("no runs found for %s - nothing to diagnose", _STUB_MODEL_ID)
+    model_id = settings.repo_models.get(repo_full_name)
+    if model_id is None:
+        logger.warning(
+            "deploy of %s has no model mapped in MLCOP_REPO_MODELS - skipping regression check",
+            repo_full_name,
+        )
         return
+    logger.info(
+        "deployment regression check: repo=%s sha=%s env=%s model=%s",
+        repo_full_name, deploy_sha, environment, model_id,
+    )
+    with closing(SQLiteStore(settings.memory_db_path)) as store:
+        retriever = EvidenceRetriever(
+            build_adapter(settings.telemetry_backend, settings.wandb_entity),
+            store,
+            # the deploy's own repo, not GITHUB_REPO: the commit range is this repo's
+            github_repo=repo_full_name,
+            github_token=settings.github_token,
+        )
+        recent = retriever.get_recent_runs(model_id, limit=1)
+        if not recent:
+            logger.warning("no runs found for %s - nothing to diagnose", model_id)
+            return
+        result = diagnose(recent[0].run_id, retriever, store, deploy_sha=deploy_sha)
 
-    result = diagnose(recent[0].run_id, retriever, store)
     logger.info("deployment regression check result for %s: %s", repo_full_name, result.explanation)
+    if not result.ranked_candidates:  # no metric moved - not an incident, don't page
+        return
+    notify_slack(
+        settings.slack_webhook_url,
+        f"Deploy {deploy_sha[:7]} of {repo_full_name} to {environment} - {model_id} post-deploy check",
+        result.explanation,
+    )
+
+
+async def run_drift_check(model_id: str) -> None:
+    """Off the event loop, for the same reason as the deploy check above -
+    the SHAP surrogate fit in diagnose_drift is CPU work."""
+    await asyncio.to_thread(check_drift, model_id)
+
+
+def check_drift(model_id: str, now: datetime | None = None) -> str | None:
+    """Workflow 2 steps 1-3: pull the live feature window from Prometheus,
+    compare it to the baseline distribution in memory/, and hand a drift to
+    agents/ for diagnosis. The first check for a model has nothing to
+    compare against, so it records the window as the baseline instead.
+
+    Diagnosis and the Slack page happen once per drift *episode*: a sweep
+    that sees the same features still drifted is the same incident, not a
+    new one, and a clean check closes the episode. Re-diagnosing every sweep
+    paged every 15 minutes and, worse, counted each sweep as a recurrence -
+    one persistent drift read as "seasonal" within four sweeps.
+
+    Returns the explanation when a new episode was diagnosed, else None."""
+    if not settings.prometheus_url:
+        logger.warning("PROMETHEUS_URL not set - drift check for %s skipped", model_id)
+        return None
+    now = now or datetime.now(timezone.utc)
+    current = PrometheusAdapter(settings.prometheus_url).get_feature_samples(
+        model_id, now - timedelta(seconds=settings.drift_window_seconds), now
+    )
+    if not current.features:
+        logger.warning(
+            "no feature samples for %s in the window - is it exporting mlcop_feature_value?", model_id
+        )
+        return None
+
+    with closing(SQLiteStore(settings.memory_db_path)) as store:
+        baseline = store.get_baseline_distribution(model_id)
+        if baseline is None:
+            store.set_baseline_distribution(model_id, current)
+            logger.info("captured the drift baseline for %s (%s features)", model_id, len(current.features))
+            return None
+
+        report = detect_dataset_drift(
+            frame_from_features(baseline.features), frame_from_features(current.features), label=model_id
+        )
+        active = store.get_active_drift(model_id)
+        if not report.dataset_drifted:
+            if active:
+                store.set_active_drift(model_id, None)
+                logger.info("drift episode for %s resolved (%s)", model_id, active)
+            logger.info("no drift for %s: %s/%s features drifted", model_id, report.n_drifted, report.n_columns)
+            return None
+
+        signature = drift_signature(report)
+        if signature == active:
+            logger.info("drift for %s is still ongoing (%s) - already reported", model_id, signature)
+            return None
+
+        # the model's own repo if a deploy mapping names one, else GITHUB_REPO
+        repo = next((r for r, m in settings.repo_models.items() if m == model_id), settings.github_repo)
+        retriever = EvidenceRetriever(
+            build_adapter(settings.telemetry_backend, settings.wandb_entity), store, repo, settings.github_token
+        )
+        result = diagnose_drift(baseline, current, report, retriever, store, settings.pipeline_paths)
+        store.set_active_drift(model_id, signature)
+
+    # Workflow 2 step 6: flag + explanation out to the log and Slack
+    logger.warning("drift diagnosed for %s:\n%s", model_id, result.explanation)
+    notify_slack(settings.slack_webhook_url, f"Drift detected on {model_id}", result.explanation)
+    return result.explanation
+
+
+def monitored_models() -> tuple[str, ...]:
+    return settings.monitored_models or tuple(dict.fromkeys(settings.repo_models.values()))
+
+
+async def run_monitoring_sweep() -> None:
+    """Workflow 5: one pass over every watched model. Pure scheduling - the
+    diagnosis is Workflow 2's. Deploy regressions are already queued per
+    deploy by the deployment_status webhook (Workflow 4), so the sweep does
+    not re-check them. One model's failure doesn't stop the rest."""
+    for model_id in monitored_models():
+        try:
+            await run_drift_check(model_id)
+        except Exception:
+            logger.exception("drift check failed for %s", model_id)
 
 
 async def run_pr_code_review(repo_full_name: str, pr_number: int, head_sha: str) -> None:

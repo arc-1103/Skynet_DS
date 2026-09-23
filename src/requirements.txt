@@ -31,7 +31,7 @@ evidently>=0.4.30
 shap>=0.46.0
 
 # --- MLOps & Experiment Tracking ---
-mlflow-skinny>=2.16.0
+wandb>=0.19.0
 
 # --- Observability & Metrics ---
 langfuse>=2.50.0

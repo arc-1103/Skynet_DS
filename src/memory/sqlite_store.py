@@ -3,7 +3,7 @@ import sqlite3
 from pathlib import Path
 
 from src.graph.causal import CauseCandidate
-from src.schemas.telemetry import NormalizedRun
+from src.schemas.telemetry import FeatureSample, NormalizedRun
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS baselines (
@@ -15,6 +15,14 @@ CREATE TABLE IF NOT EXISTS diagnoses (
     model_id TEXT NOT NULL,
     verdict_json TEXT NOT NULL,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+CREATE TABLE IF NOT EXISTS baseline_distributions (
+    model_id TEXT PRIMARY KEY,
+    sample_json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS active_drifts (
+    model_id TEXT PRIMARY KEY,
+    signature TEXT NOT NULL
 );
 """
 
@@ -60,6 +68,37 @@ class SQLiteStore:
             (model_id,),
         ).fetchall()
         return [CauseCandidate.model_validate_json(r[0]) for r in rows]
+
+    def get_baseline_distribution(self, model_id: str) -> FeatureSample | None:
+        row = self._conn.execute(
+            "SELECT sample_json FROM baseline_distributions WHERE model_id = ?", (model_id,)
+        ).fetchone()
+        return FeatureSample.model_validate_json(row[0]) if row else None
+
+    def set_baseline_distribution(self, model_id: str, sample: FeatureSample) -> None:
+        self._conn.execute(
+            "INSERT INTO baseline_distributions (model_id, sample_json) VALUES (?, ?) "
+            "ON CONFLICT(model_id) DO UPDATE SET sample_json = excluded.sample_json",
+            (model_id, sample.model_dump_json()),
+        )
+        self._conn.commit()
+
+    def get_active_drift(self, model_id: str) -> str | None:
+        row = self._conn.execute(
+            "SELECT signature FROM active_drifts WHERE model_id = ?", (model_id,)
+        ).fetchone()
+        return row[0] if row else None
+
+    def set_active_drift(self, model_id: str, signature: str | None) -> None:
+        if signature is None:
+            self._conn.execute("DELETE FROM active_drifts WHERE model_id = ?", (model_id,))
+        else:
+            self._conn.execute(
+                "INSERT INTO active_drifts (model_id, signature) VALUES (?, ?) "
+                "ON CONFLICT(model_id) DO UPDATE SET signature = excluded.signature",
+                (model_id, signature),
+            )
+        self._conn.commit()
 
     def close(self) -> None:
         self._conn.close()

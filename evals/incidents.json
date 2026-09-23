@@ -1,0 +1,312 @@
+[
+  {
+    "id": "lr-bump",
+    "source": "synthetic",
+    "truth": "config",
+    "note": "Learning rate raised 3x; loss diverges late in training.",
+    "baseline": {
+      "run_id": "i1-base",
+      "model_id": "fraud-clf",
+      "metrics": {
+        "eval_accuracy": 0.91
+      },
+      "config": {
+        "learning_rate": 0.0003,
+        "batch_size": 64
+      },
+      "code_ref": "a1",
+      "data_version": "d3"
+    },
+    "current": {
+      "run_id": "i1-cur",
+      "model_id": "fraud-clf",
+      "metrics": {
+        "eval_accuracy": 0.83
+      },
+      "config": {
+        "learning_rate": 0.001,
+        "batch_size": 64
+      },
+      "code_ref": "a1",
+      "data_version": "d3"
+    }
+  },
+  {
+    "id": "new-data-snapshot",
+    "source": "synthetic",
+    "truth": "data",
+    "note": "Upstream vendor changed; new snapshot has a label-rate shift.",
+    "baseline": {
+      "run_id": "i2-base",
+      "model_id": "churn",
+      "metrics": {
+        "auc": 0.88
+      },
+      "config": {
+        "max_depth": 6
+      },
+      "code_ref": "b1",
+      "data_version": "2026-08"
+    },
+    "current": {
+      "run_id": "i2-cur",
+      "model_id": "churn",
+      "metrics": {
+        "auc": 0.81
+      },
+      "config": {
+        "max_depth": 6
+      },
+      "code_ref": "b1",
+      "data_version": "2026-09"
+    }
+  },
+  {
+    "id": "tokenizer-bug",
+    "source": "synthetic",
+    "truth": "code",
+    "note": "Refactor lower-cased tokens twice; only code moved.",
+    "baseline": {
+      "run_id": "i3-base",
+      "model_id": "intent",
+      "metrics": {
+        "f1": 0.79
+      },
+      "config": {
+        "epochs": 5
+      },
+      "code_ref": "c1",
+      "data_version": "v7"
+    },
+    "current": {
+      "run_id": "i3-cur",
+      "model_id": "intent",
+      "metrics": {
+        "f1": 0.71
+      },
+      "config": {
+        "epochs": 5
+      },
+      "code_ref": "c2",
+      "data_version": "v7"
+    }
+  },
+  {
+    "id": "batch-and-lr",
+    "source": "synthetic",
+    "truth": "config",
+    "note": "Batch size halved and LR doubled in the same sweep.",
+    "baseline": {
+      "run_id": "i4-base",
+      "model_id": "fraud-clf",
+      "metrics": {
+        "eval_accuracy": 0.9
+      },
+      "config": {
+        "learning_rate": 0.0003,
+        "batch_size": 64
+      },
+      "code_ref": "a1",
+      "data_version": "d3"
+    },
+    "current": {
+      "run_id": "i4-cur",
+      "model_id": "fraud-clf",
+      "metrics": {
+        "eval_accuracy": 0.86
+      },
+      "config": {
+        "learning_rate": 0.0006,
+        "batch_size": 32
+      },
+      "code_ref": "a1",
+      "data_version": "d3"
+    }
+  },
+  {
+    "id": "data-plus-refactor",
+    "source": "synthetic",
+    "truth": "data",
+    "note": "New data version shipped alongside a no-op lint refactor.",
+    "baseline": {
+      "run_id": "i5-base",
+      "model_id": "churn",
+      "metrics": {
+        "auc": 0.87
+      },
+      "config": {
+        "max_depth": 6
+      },
+      "code_ref": "b1",
+      "data_version": "2026-07"
+    },
+    "current": {
+      "run_id": "i5-cur",
+      "model_id": "churn",
+      "metrics": {
+        "auc": 0.8
+      },
+      "config": {
+        "max_depth": 6
+      },
+      "code_ref": "b2",
+      "data_version": "2026-08"
+    }
+  },
+  {
+    "id": "logging-noise-hides-code",
+    "source": "synthetic",
+    "truth": "code",
+    "note": "Real cause is a feature-join bug; config only changed log_every.",
+    "baseline": {
+      "run_id": "i6-base",
+      "model_id": "ranker",
+      "metrics": {
+        "ndcg": 0.62
+      },
+      "config": {
+        "log_every": 100,
+        "lr": 0.01
+      },
+      "code_ref": "r1",
+      "data_version": "q1"
+    },
+    "current": {
+      "run_id": "i6-cur",
+      "model_id": "ranker",
+      "metrics": {
+        "ndcg": 0.55
+      },
+      "config": {
+        "log_every": 50,
+        "lr": 0.01
+      },
+      "code_ref": "r2",
+      "data_version": "q1"
+    }
+  },
+  {
+    "id": "seed-noise-hides-data",
+    "source": "synthetic",
+    "truth": "data",
+    "note": "Only the seed changed in config; the real shift is a new data version.",
+    "baseline": {
+      "run_id": "i7-base",
+      "model_id": "intent",
+      "metrics": {
+        "f1": 0.8
+      },
+      "config": {
+        "epochs": 5,
+        "seed": 1
+      },
+      "code_ref": "c1",
+      "data_version": "v7"
+    },
+    "current": {
+      "run_id": "i7-cur",
+      "model_id": "intent",
+      "metrics": {
+        "f1": 0.74
+      },
+      "config": {
+        "epochs": 5,
+        "seed": 2
+      },
+      "code_ref": "c1",
+      "data_version": "v8"
+    }
+  },
+  {
+    "id": "dropout-raised",
+    "source": "synthetic",
+    "truth": "config",
+    "note": "Dropout doubled; model underfits.",
+    "baseline": {
+      "run_id": "i8-base",
+      "model_id": "vision",
+      "metrics": {
+        "top1": 0.76
+      },
+      "config": {
+        "dropout": 0.2
+      },
+      "code_ref": "v1",
+      "data_version": "imgs-2"
+    },
+    "current": {
+      "run_id": "i8-cur",
+      "model_id": "vision",
+      "metrics": {
+        "top1": 0.71
+      },
+      "config": {
+        "dropout": 0.4
+      },
+      "code_ref": "v1",
+      "data_version": "imgs-2"
+    }
+  },
+  {
+    "id": "augmentation-removed",
+    "source": "synthetic",
+    "truth": "code",
+    "note": "Augmentation pipeline deleted in a cleanup commit.",
+    "baseline": {
+      "run_id": "i9-base",
+      "model_id": "vision",
+      "metrics": {
+        "top1": 0.77
+      },
+      "config": {
+        "dropout": 0.2
+      },
+      "code_ref": "v1",
+      "data_version": "imgs-2"
+    },
+    "current": {
+      "run_id": "i9-cur",
+      "model_id": "vision",
+      "metrics": {
+        "top1": 0.7
+      },
+      "config": {
+        "dropout": 0.2
+      },
+      "code_ref": "v2",
+      "data_version": "imgs-2"
+    }
+  },
+  {
+    "id": "epochs-cut",
+    "source": "synthetic",
+    "truth": "config",
+    "note": "Epochs cut to save cost while a routine data refresh landed.",
+    "baseline": {
+      "run_id": "i10-base",
+      "model_id": "churn",
+      "metrics": {
+        "auc": 0.88
+      },
+      "config": {
+        "max_depth": 6,
+        "n_estimators": 400
+      },
+      "code_ref": "b1",
+      "data_version": "2026-08"
+    },
+    "current": {
+      "run_id": "i10-cur",
+      "model_id": "churn",
+      "metrics": {
+        "auc": 0.84
+      },
+      "config": {
+        "max_depth": 6,
+        "n_estimators": 100
+      },
+      "code_ref": "b1",
+      "data_version": "2026-09"
+    }
+  }
+]

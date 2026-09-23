@@ -36,3 +36,11 @@ def read_table(source: str | Path | IO[Any], *, suffix: str | None = None) -> pd
     if suffix == ".csv":
         return pd.read_csv(source)
     raise ValueError(f"unsupported file type {suffix!r}; expected one of {SUPPORTED_SUFFIXES}")
+
+
+def frame_from_features(features: dict[str, list[float]]) -> pd.DataFrame:
+    """Per-feature value lists (schemas/telemetry.FeatureSample) as one
+    frame. Series can differ in length - a scrape gap drops points for one
+    feature only - so shorter columns are NaN-padded; the detectors drop
+    NaNs per column."""
+    return pd.DataFrame({name: pd.Series(values, dtype=float) for name, values in features.items()})

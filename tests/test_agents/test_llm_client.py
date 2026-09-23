@@ -213,3 +213,21 @@ def test_call_llm_with_tools_returns_none_on_client_error(monkeypatch):
 
     monkeypatch.setattr(llm_client, "_client", _boom)
     assert llm_client.call_llm_with_tools("system", "user", [], {}) is None
+
+
+def test_call_llm_text_returns_stripped_text_or_none(monkeypatch):
+    monkeypatch.setattr(llm_client, "settings", _with_api_key(None))
+    assert llm_client.call_llm_text("system", "user") is None  # no key
+
+    monkeypatch.setattr(llm_client, "settings", _with_api_key("fake-key"))
+    monkeypatch.setattr(llm_client, "_client", lambda: _FakeClient("  Run 'x' regressed.\n"))
+    assert llm_client.call_llm_text("system", "user") == "Run 'x' regressed."
+
+    monkeypatch.setattr(llm_client, "_client", lambda: _FakeClient("   "))
+    assert llm_client.call_llm_text("system", "user") is None
+
+    def _boom():
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(llm_client, "_client", _boom)
+    assert llm_client.call_llm_text("system", "user") is None

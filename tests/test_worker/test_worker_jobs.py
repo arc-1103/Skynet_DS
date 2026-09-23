@@ -1,40 +1,246 @@
 import json
 import subprocess
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from src.agents import drift_agent
 from src.core.config import settings
+from src.retrieval import evidence
 from src.schemas.drift import DatasetDriftReport
 from src.schemas.pr import ChangedFile, PRPayload
 from src.worker import jobs
 
 
-@pytest.mark.asyncio
-async def test_run_deployment_regression_check_diagnoses_seeded_model(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)  # memory.db lands in tmp_path, not the repo
+@pytest.fixture
+def slack(monkeypatch):
+    """Captures Slack posts instead of sending them."""
+    posts = []
+    monkeypatch.setattr(jobs, "notify_slack", lambda url, title, body: posts.append((url, title, body)))
+    return posts
 
+
+@pytest.fixture
+def mapped_repo(tmp_path, monkeypatch, slack):
+    """Maps acme/fraud-clf to the fake adapter's seeded model and stubs the
+    GitHub compare call; returns the list of diagnose() calls."""
+    monkeypatch.chdir(tmp_path)  # memory.db lands in tmp_path, not the repo
+    monkeypatch.setattr(
+        jobs, "settings",
+        replace(settings, repo_models={"acme/fraud-clf": "fraud-clf"}, slack_webhook_url="https://hooks.test/x"),
+    )
+    monkeypatch.setattr(evidence, "fetch_commit_diff", lambda repo, base, head, token: f"{repo} diff")
+    calls = []
+    real_diagnose = jobs.diagnose
+
+    def spy(*args, **kwargs):
+        result = real_diagnose(*args, **kwargs)
+        calls.append((args, kwargs, result))
+        return result
+
+    monkeypatch.setattr(jobs, "diagnose", spy)
+    return calls
+
+
+@pytest.mark.asyncio
+async def test_run_deployment_regression_check_diagnoses_the_mapped_model(mapped_repo, slack):
     await jobs.run_deployment_regression_check(
         repo_full_name="acme/fraud-clf",
-        deploy_sha="abc123",
+        deploy_sha="abc999",
         environment="production",
     )
-    # No assertion beyond "it completes without raising" - this job is a
-    # documented stub (see TODO in src/worker/jobs.py) until Phase 1 wires a
-    # real repo -> model_id mapping and a real adapter.
+
+    [(args, kwargs, result)] = mapped_repo
+    assert args[0] == "run-004"  # latest run of fraud-clf
+    assert kwargs["deploy_sha"] == "abc999"
+    code = next(c for c in result.ranked_candidates if c.kind == "code")
+    # code evidence is scoped to the deploy and fetched from the deploy's repo
+    assert "abc111..abc999: acme/fraud-clf diff" in code.description
+    [(url, title, body)] = slack
+    assert url == "https://hooks.test/x"
+    assert title == "Deploy abc999 of acme/fraud-clf to production - fraud-clf post-deploy check"
+    assert body == result.explanation
 
 
 @pytest.mark.asyncio
-async def test_run_deployment_regression_check_handles_unknown_model(tmp_path, monkeypatch):
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setattr(jobs, "_STUB_MODEL_ID", "no-such-model")
-
+async def test_run_deployment_regression_check_skips_an_unmapped_repo(mapped_repo, slack):
     await jobs.run_deployment_regression_check(
         repo_full_name="acme/other",
         deploy_sha="def456",
         environment="staging",
     )
-    # Should log a warning and return cleanly, not raise.
+    assert mapped_repo == []
+    assert slack == []  # nothing diagnosed, nothing posted
+
+
+@pytest.mark.asyncio
+async def test_run_deployment_regression_check_handles_a_model_with_no_runs(mapped_repo, monkeypatch):
+    monkeypatch.setattr(jobs, "settings", replace(settings, repo_models={"acme/fraud-clf": "no-such-model"}))
+    await jobs.run_deployment_regression_check(
+        repo_full_name="acme/fraud-clf",
+        deploy_sha="def456",
+        environment="staging",
+    )
+    assert mapped_repo == []
+
+
+@pytest.mark.asyncio
+async def test_a_deploy_with_no_metric_change_does_not_page(mapped_repo, slack, monkeypatch):
+    """Review finding: with W&B a deploy usually has no new training run, so
+    the latest run is the baseline itself - that used to post a "most
+    likely cause" for a regression that never happened, on every deploy."""
+    from src.observability.fake_adapter import FakeTelemetryAdapter
+    from src.schemas.telemetry import NormalizedRun
+
+    only = NormalizedRun(
+        run_id="r1", model_id="fraud-clf", timestamp=datetime.now(timezone.utc),
+        metrics={"acc": 0.91}, config={"lr": 0.1}, code_ref="abc111",
+    )
+    monkeypatch.setattr(
+        jobs, "build_adapter", lambda *a: FakeTelemetryAdapter(runs=[only], baselines={"fraud-clf": "r1"})
+    )
+
+    await jobs.run_deployment_regression_check(
+        repo_full_name="acme/fraud-clf", deploy_sha="bbb222", environment="production"
+    )
+
+    [(_, _, result)] = mapped_repo
+    assert result.ranked_candidates == []
+    assert "no meaningful delta" in result.explanation
+    assert slack == []
+
+
+def _sample(model_id, shift, n=300):
+    """`shift` moves amount and age; tenure never moves. So a shift drifts
+    2/3 features - over the detector's 50% share_threshold, while keeping
+    the drift's own confidence below a seasonal verdict's."""
+    import numpy as np
+
+    from src.schemas.telemetry import FeatureSample
+
+    rng = np.random.default_rng(1)
+    now = datetime.now(timezone.utc)
+    return FeatureSample(
+        model_id=model_id, start=now - timedelta(hours=1), end=now,
+        features={
+            "amount": rng.normal(shift, 1, n).tolist(),
+            "age": rng.normal(40 + 5 * shift, 5, n).tolist(),
+            "tenure": rng.normal(3, 1, n).tolist(),
+        },
+    )
+
+
+@pytest.fixture
+def prometheus(tmp_path, monkeypatch, slack):
+    """Points check_drift at a fake Prometheus whose next window is
+    whatever the test puts in `windows`."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        jobs, "settings",
+        replace(
+            settings, prometheus_url="http://prom", repo_models={"acme/fraud": "fraud-clf"},
+            slack_webhook_url="https://hooks.test/x",
+        ),
+    )
+    windows = []
+
+    class FakePrometheus:
+        def __init__(self, url):
+            assert url == "http://prom"
+
+        def get_feature_samples(self, model_id, start, end):
+            return windows.pop(0)
+
+    monkeypatch.setattr(jobs, "PrometheusAdapter", FakePrometheus)
+    return windows
+
+
+def test_check_drift_skips_without_prometheus(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(jobs, "settings", replace(settings, prometheus_url=None))
+    monkeypatch.setattr(jobs, "PrometheusAdapter", lambda url: pytest.fail("should not query"))
+    assert jobs.check_drift("fraud-clf") is None
+
+
+def test_check_drift_captures_a_baseline_then_diagnoses_drift(prometheus, slack):
+    from src.memory.sqlite_store import SQLiteStore
+
+    prometheus += [_sample("fraud-clf", 0), _sample("fraud-clf", 0.02), _sample("fraud-clf", 3)]
+
+    assert jobs.check_drift("fraud-clf") is None  # first window becomes the baseline
+    assert SQLiteStore(jobs.settings.memory_db_path).get_baseline_distribution("fraud-clf") is not None
+    assert jobs.check_drift("fraud-clf") is None  # same distribution: no drift, no diagnosis
+    assert slack == []  # neither a baseline capture nor a clean check pages anyone
+
+    explanation = jobs.check_drift("fraud-clf")  # amount and age shifted 3 sigma
+
+    assert explanation.startswith("Drift on 'fraud-clf': 2/3 features drifted")
+    assert "Upstream data shift in age, amount" in explanation
+    assert slack == [("https://hooks.test/x", "Drift detected on fraud-clf", explanation)]
+    assert SQLiteStore(jobs.settings.memory_db_path).get_diagnosis_history("fraud-clf")
+
+
+def test_check_drift_does_not_baseline_an_empty_window(prometheus):
+    from src.memory.sqlite_store import SQLiteStore
+    from src.schemas.telemetry import FeatureSample
+
+    now = datetime.now(timezone.utc)
+    prometheus.append(FeatureSample(model_id="fraud-clf", start=now, end=now))
+
+    assert jobs.check_drift("fraud-clf") is None
+    assert SQLiteStore(jobs.settings.memory_db_path).get_baseline_distribution("fraud-clf") is None
+
+
+def test_a_persistent_drift_is_one_episode_diagnosed_and_paged_once(prometheus, slack):
+    """Review finding: every sweep used to re-diagnose and re-page the same
+    ongoing drift, and count each sweep as a recurrence - by the fourth
+    sweep a pipeline-caused drift was reported as seasonal variation."""
+    from src.memory.sqlite_store import SQLiteStore
+
+    prometheus += [_sample("fraud-clf", 0)] + [_sample("fraud-clf", 3) for _ in range(5)]
+
+    results = [jobs.check_drift("fraud-clf") for _ in range(6)]  # baseline + 5 sweeps
+
+    assert results[0] is None and results[1] is not None
+    assert results[2:] == [None] * 4  # still the same episode: already reported
+    assert len(slack) == 1
+    assert len(SQLiteStore(jobs.settings.memory_db_path).get_diagnosis_history("fraud-clf")) == 1
+
+
+def test_seasonality_counts_episodes_separated_by_clean_checks(prometheus, slack):
+    drift, clean = _sample("fraud-clf", 3), _sample("fraud-clf", 0.02)
+    prometheus += [_sample("fraud-clf", 0), drift, drift, clean, drift, clean, clean, drift]
+
+    results = [jobs.check_drift("fraud-clf") for _ in range(8)]
+
+    episodes = [r for r in results if r is not None]
+    assert len(episodes) == len(slack) == 3  # episode starts only
+    assert "Most likely cause (data, confidence 0.57): Upstream data shift" in episodes[1]
+    # the third episode of the same features reads as recurring, not new
+    assert "Most likely cause (data, confidence 0.70): Expected/seasonal variation: "         "the same features drifted in 2 earlier episodes" in episodes[2]
+
+
+@pytest.mark.asyncio
+async def test_monitoring_sweep_checks_every_model_and_isolates_failures(monkeypatch):
+    monkeypatch.setattr(jobs, "settings", replace(settings, monitored_models=(), repo_models={"a/x": "m1", "a/y": "m2", "a/z": "m1"}))
+    checked = []
+
+    def fake_check(model_id):
+        checked.append(model_id)
+        if model_id == "m1":
+            raise RuntimeError("prometheus down")
+
+    monkeypatch.setattr(jobs, "check_drift", fake_check)
+
+    await jobs.run_monitoring_sweep()
+
+    assert checked == ["m1", "m2"]  # deduplicated, and m1 failing didn't stop m2
+
+
+def test_monitored_models_prefers_the_explicit_list(monkeypatch):
+    monkeypatch.setattr(jobs, "settings", replace(settings, monitored_models=("only",), repo_models={"a/x": "m1"}))
+    assert jobs.monitored_models() == ("only",)
 
 
 @pytest.mark.asyncio

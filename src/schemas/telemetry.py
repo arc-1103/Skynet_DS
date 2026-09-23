@@ -32,3 +32,17 @@ class NormalizedRun(BaseModel):
         default=None, 
         description="Identifier/hash of the training or eval data version"
     )
+
+class FeatureSample(BaseModel):
+    """A window of live feature values for one model - what a distribution
+    adapter (Prometheus) normalizes into, and what memory/ keeps as the
+    drift baseline (Workflow 2 steps 1-2)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model_id: str
+    start: datetime
+    end: datetime
+    features: dict[str, list[float]] = Field(
+        default_factory=dict, description="feature name -> observed values in the window"
+    )

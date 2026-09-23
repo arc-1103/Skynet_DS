@@ -217,3 +217,27 @@ def call_llm_with_tools(
 
     logger.warning("Groq tool-call loop exceeded max_rounds=%d without a final answer", max_rounds)
     return None
+
+
+def call_llm_text(system_prompt: str, user_prompt: str) -> str | None:
+    """One plain-text completion - the diagnostic core's explanation step
+    (prompts/explain.md). Same fail-open contract as call_llm_findings:
+    None means "no LLM text", and the caller renders its template instead."""
+    if not llm_enabled():
+        return None
+    try:
+        response = _client().chat.completions.create(
+            model=settings.groq_model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            reasoning_effort="none",
+            temperature=0.1,
+            max_tokens=512,
+        )
+        text = response.choices[0].message.content
+    except Exception:  # Groq/network/SDK errors must never take the diagnosis down
+        logger.warning("Groq explanation call failed; falling back to the template", exc_info=True)
+        return None
+    return (text or "").strip() or None

@@ -44,3 +44,24 @@ async def test_failing_job_does_not_raise_or_leak(caplog):
     await asyncio.sleep(0.05)
 
     assert q.pending_count() == 0  # failure was swallowed and logged, not left dangling
+
+
+@pytest.mark.asyncio
+async def test_schedule_every_repeats_and_survives_a_failing_run():
+    calls = []
+
+    async def job():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("first sweep fails")
+
+    q = DelayedTaskQueue()
+    q.schedule_every(job, interval_seconds=0.01)
+    await asyncio.sleep(0.1)
+
+    assert len(calls) >= 3
+    assert q.pending_count() == 1  # still running
+
+    q.cancel_all()
+    await asyncio.sleep(0.01)  # cancellation lands, then its done-callback runs
+    assert q.pending_count() == 0

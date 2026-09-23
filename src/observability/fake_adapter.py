@@ -7,9 +7,20 @@ from src.schemas.telemetry import NormalizedRun
 class FakeTelemetryAdapter:
     """Canned TelemetryAdapter with a seeded regression (config change causing
     an accuracy drop). Lets Phase 0 build and exercise the diagnostic core
-    end-to-end before a real MLflow/W&B adapter exists (BluePrint.md Phase 0)."""
+    end-to-end before a real MLflow/W&B adapter exists (BluePrint.md Phase 0).
 
-    def __init__(self) -> None:
+    Pass `runs` + `baselines` (model_id -> baseline run_id) to serve any
+    other canned set instead - the labeled-incident eval (eval/) does."""
+
+    def __init__(
+        self,
+        runs: list[NormalizedRun] | None = None,
+        baselines: dict[str, str] | None = None,
+    ) -> None:
+        if runs is not None:
+            self._runs = {r.run_id: r for r in runs}
+            self._baseline_by_model = dict(baselines or {})
+            return
         now = datetime.now(timezone.utc)
         self._runs: dict[str, NormalizedRun] = {
             "run-baseline": NormalizedRun(

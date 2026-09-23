@@ -217,3 +217,37 @@ def test_pull_request_with_a_path_traversal_sha_is_rejected(client):
     )
     assert resp.status_code == 422
     assert client.scheduled == []
+
+
+def test_deployment_with_a_non_sha_is_rejected(client):
+    """deploy sha reaches a GitHub compare URL in retrieval/evidence.py."""
+    payload = {
+        **DEPLOYMENT_STATUS_SUCCESS,
+        "deployment": {"sha": "main/../../x", "ref": "main", "environment": "production"},
+    }
+    resp = client.post(
+        "/webhooks/github", json=payload, headers={"X-GitHub-Event": "deployment_status"}
+    )
+    assert resp.status_code == 422
+    assert client.scheduled == []
+
+
+@pytest.mark.parametrize(
+    "interval, url, expected",
+    [(900, "http://prom", [900]), (0, "http://prom", []), (900, None, [])],
+)
+def test_monitoring_sweep_starts_with_the_server_only_when_configured(monkeypatch, interval, url, expected):
+    started = []
+    monkeypatch.setattr(
+        webhooks, "get_settings",
+        lambda: Settings(monitor_interval_seconds=interval, prometheus_url=url),
+    )
+    monkeypatch.setattr(
+        webhooks.queue, "schedule_every",
+        lambda func, kwargs=None, *, interval_seconds: started.append(interval_seconds),
+    )
+
+    with TestClient(webhooks.app):
+        pass
+
+    assert started == expected
