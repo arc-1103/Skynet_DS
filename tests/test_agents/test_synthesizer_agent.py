@@ -15,9 +15,9 @@ def _pr() -> PRPayload:
     )
 
 
-def _finding(severity: Severity, title: str = "issue") -> ReviewFinding:
+def _finding(severity: Severity, title: str = "issue", line: int = 1) -> ReviewFinding:
     return ReviewFinding(
-        file_path="a.py", line_number=1, title=title, severity=severity, description="desc"
+        file_path="a.py", line_number=line, title=title, severity=severity, description="desc"
     )
 
 
@@ -82,8 +82,8 @@ def test_inline_findings_aggregate_all_three_specialists():
     result = run_synthesizer_agent(
         _base_state(
             security_findings=[_finding(Severity.HIGH, "sec")],
-            architecture_findings=[_finding(Severity.LOW, "arch")],
-            ml_debugger_findings=[_finding(Severity.MEDIUM, "ml")],
+            architecture_findings=[_finding(Severity.LOW, "arch", line=2)],
+            ml_debugger_findings=[_finding(Severity.MEDIUM, "ml", line=3)],
         )
     )
     titles = {f.title for f in result["final_review"].inline_findings}
@@ -112,3 +112,16 @@ def test_flagged_drift_fails_the_review():
     assert drifted.dataset_drifted is True
     assert review.overall_passed is False
     assert "CHANGES REQUESTED" in review.markdown_summary
+
+
+def test_same_line_flagged_by_security_is_not_repeated_by_architecture():
+    sec = ReviewFinding(file_path="m.py", line_number=11, title="Use of eval()", severity=Severity.HIGH, description="d")
+    arch = ReviewFinding(file_path="m.py", line_number=11, title="Use of eval()", severity=Severity.CRITICAL, description="d")
+    other_line = ReviewFinding(file_path="m.py", line_number=3, title="God Function", severity=Severity.MEDIUM, description="d")
+    file_level = ReviewFinding(file_path="m.py", line_number=None, title="Large diff", severity=Severity.MEDIUM, description="d")
+
+    review = run_synthesizer_agent(
+        _base_state(security_findings=[sec], architecture_findings=[arch, other_line, file_level])
+    )["final_review"]
+
+    assert review.inline_findings == [sec, other_line, file_level]

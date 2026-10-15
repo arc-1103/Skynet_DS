@@ -107,8 +107,10 @@ class _FakeToolCompletions:
 
     def __init__(self, responses: list[_FakeToolResponse]):
         self._responses = list(responses)
+        self.tool_choices: list[str] = []
 
     def create(self, **kwargs):
+        self.tool_choices.append(kwargs.get("tool_choice"))
         return self._responses.pop(0)
 
 
@@ -188,6 +190,39 @@ def test_call_llm_with_tools_reports_tool_exception_without_crashing(monkeypatch
         "system", "user", [{"type": "function"}], {"boom_tool": boom_tool}
     )
     assert result == []
+
+
+def test_call_llm_with_tools_stops_on_a_repeated_identical_call_instead_of_looping(monkeypatch):
+    """Observed against the real check_deprecated_api tool: a live lookup
+    403'd, and the model retried the exact same (name, arguments) three
+    times in a row, burning half its round budget before giving up with
+    no final answer. A repeat can't return new information (the same
+    inputs give the same output), so it's treated as a sign the model
+    isn't converging and the loop stops right there - it never even
+    re-executes the repeated call, let alone pays for more rounds."""
+    monkeypatch.setattr(llm_client, "settings", _with_api_key("fake-key"))
+    tool_call = _FakeToolCall("call_1", "my_tool", '{"x": 2}')
+    responses = [
+        _FakeToolResponse(_FakeToolMessage(None, tool_calls=[tool_call])),  # round 1: first call
+        _FakeToolResponse(_FakeToolMessage(None, tool_calls=[tool_call])),  # round 2: repeat
+        _FakeToolResponse(_FakeToolMessage('{"findings": []}')),  # never reached
+    ]
+    fake_client = _FakeToolClient(responses)
+    monkeypatch.setattr(llm_client, "_client", lambda: fake_client)
+
+    calls: list[int] = []
+
+    def my_tool(x: int) -> dict:
+        calls.append(x)
+        return {"error": "still failing"}
+
+    result = llm_client.call_llm_with_tools(
+        "system", "user", [{"type": "function"}], {"my_tool": my_tool}
+    )
+
+    assert result is None
+    assert calls == [2]  # executed once (round 1); round 2's repeat was never run
+    assert fake_client.chat.completions.tool_choices == ["auto", "auto"]  # round 3 never called
 
 
 def test_call_llm_with_tools_returns_none_when_loop_never_terminates(monkeypatch):

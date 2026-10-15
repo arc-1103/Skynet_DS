@@ -48,7 +48,13 @@ def infer_kind(*series: pd.Series) -> ColumnKind:
 def _encode_for_model(reference: np.ndarray, current: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """Map categories to shared integer codes so the domain classifier can
     consume them. Codes are ordinal, which is fine for a tree ensemble - it
-    can split out individual codes - but would not be for a linear model."""
+    can split out individual codes - but would not be for a linear model.
+
+    Cast to str first: a column can be int64 in reference and gain a
+    string value in current, and np.unique sorts its input, which raises
+    TypeError across mixed dtypes. Only category identity matters here,
+    so stringifying first is lossless."""
+    reference, current = np.asarray(reference).astype(str), np.asarray(current).astype(str)
     categories, codes = np.unique(np.concatenate([reference, current]), return_inverse=True)
     return codes[: len(reference)].astype(float), codes[len(reference) :].astype(float)
 

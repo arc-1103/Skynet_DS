@@ -175,6 +175,7 @@ def call_llm_with_tools(
         {"role": "system", "content": system_prompt},
         {"role": "user", "content": user_prompt},
     ]
+    seen_calls: set[tuple[str, str]] = set()
 
     try:
         for _ in range(max_rounds):
@@ -209,6 +210,26 @@ def call_llm_with_tools(
                     "tool_calls": tool_call_params,
                 }
             )
+            # A call identical to one already made (same name + arguments)
+            # is deterministic - it will return exactly the same result -
+            # so a model that issues one is, by construction, not making
+            # progress. Observed in the wild against check_deprecated_api:
+            # a live doc lookup 403'd, and the model retried the exact same
+            # (url, symbol) three times in a row, burning half its round
+            # budget and never emitting a final answer. Stop here instead
+            # of paying for more rounds that can't help.
+            #
+            # (tool_choice="none" to force a text reply instead was tried
+            # and rejected: Groq's server validates the underlying model's
+            # raw generation against tool_choice, and a tool-trained model
+            # that still emits a tool-call token sequence gets a 400 for
+            # it - a worse outcome than stopping here, though still caught
+            # by this function's fail-open contract either way.)
+            call_keys = [(call.function.name, call.function.arguments or "{}") for call in tool_calls]
+            if any(key in seen_calls for key in call_keys):
+                logger.warning("Groq repeated an identical tool call; stopping instead of exhausting rounds")
+                return None
+            seen_calls.update(call_keys)
             for call in tool_calls:
                 messages.append(_run_tool_call(call, tool_implementations))
     except Exception:  # Groq/network/SDK errors must never take the review down

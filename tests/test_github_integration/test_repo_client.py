@@ -52,3 +52,22 @@ def test_lock_is_released_by_its_own_holder(tmp_path):
         pass
 
     assert not lock_path.exists()
+
+
+def test_dest_is_keyed_on_full_repo_name_not_just_the_repo(tmp_path, monkeypatch):
+    """Two different owners can have identically-named repos; keying the
+    clone dir on the repo name alone would make them share one working
+    tree, one lock, and (since an existing dest skips `clone`) one
+    `origin` remote - so a later job for the second repo would fetch
+    against the first repo's remote."""
+    calls = []
+    monkeypatch.setattr(
+        repo_client.subprocess,
+        "run",
+        lambda cmd, **kwargs: calls.append((kwargs.get("cwd"), cmd)) or subprocess.CompletedProcess(cmd, 0),
+    )
+
+    dest_a = clone_or_checkout("alice/model", "deadbeef", dest_root=tmp_path)
+    dest_b = clone_or_checkout("bob/model", "deadbeef", dest_root=tmp_path)
+
+    assert dest_a != dest_b

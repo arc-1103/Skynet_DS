@@ -360,9 +360,16 @@ def make_tool_implementations(repo_path: str | Path | None = None) -> dict[str, 
     file paths the model supplies resolve against real repo content
     instead of the server's cwd. check_deprecated_api takes a URL, not a
     repo path, so it passes through unchanged. Mirrors
-    drift_agent.make_drift_agent's repo_path factory pattern."""
+    drift_agent.make_drift_agent's repo_path factory pattern.
+
+    Without a checkout there is no repo tree to confine a path to -
+    resolve_repo_path(None, ...) is a no-op (see its docstring), so the
+    three file-reading tools would open any path the model names, anywhere
+    on the server. Drop them rather than hand them out unconfined;
+    check_deprecated_api has its own SSRF guard and isn't path-based, so
+    it stays."""
     if repo_path is None:
-        return dict(TOOL_IMPLEMENTATIONS)
+        return {"check_deprecated_api": check_deprecated_api}
 
     def _inspect_dataset_schema(file_path: str) -> dict[str, Any]:
         return inspect_dataset_schema(resolve_repo_path(repo_path, file_path))

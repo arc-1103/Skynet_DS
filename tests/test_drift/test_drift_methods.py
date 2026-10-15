@@ -189,3 +189,35 @@ def test_binning_falls_back_to_categories_for_binary_columns():
     reference = np.array([0.0] * 90 + [1.0] * 10)
     current = np.array([0.0] * 20 + [1.0] * 80)
     assert methods.psi(reference, current).drifted is True
+
+
+def test_a_rare_binary_flag_flipping_entirely_is_flagged_as_drift():
+    """A 5%-true flag going to 100%-true collapses quantile binning to a
+    single bin (edges=[0.0, 1.0]) - a size-2 edge array, which the old
+    `edges.size < 2` fallback check didn't catch, so every bucketed method
+    (PSI, euclidean, cosine) saw identical single-bin histograms and
+    reported zero distance regardless of the actual shift."""
+    reference = np.array([0.0] * 95 + [1.0] * 5)
+    current = np.ones(100)
+    assert methods.psi(reference, current).drifted is True
+    assert methods.euclidean_distance(reference, current).drifted is True
+    assert methods.cosine_distance(reference, current).drifted is True
+
+
+def test_category_merge_tolerates_mixed_types():
+    """A categorical column can be int on one side and gain a string value
+    on the other (e.g. a sentinel like "unknown" added in a later PR).
+    np.union1d sorts its concatenated input and raises TypeError across
+    incompatible dtypes - this must not propagate out of psi()."""
+    reference = np.array([20, 30, 40, 50], dtype=object)
+    current = np.array([20, 30, "unknown", 50], dtype=object)
+    result = methods.psi(reference, current, kind=ColumnKind.CATEGORICAL)
+    assert result.method is DriftMethod.PSI
+
+
+def test_model_based_rejects_empty_input_instead_of_crashing():
+    """reshape(0, -1) on an empty array raises a bare ValueError, not
+    DriftInputError - detect_column_drift only catches DriftInputError per
+    method, so this escaped and took down the whole dataset report."""
+    with pytest.raises(methods.DriftInputError):
+        methods.model_based(np.array([]), np.arange(10, dtype=float))

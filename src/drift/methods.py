@@ -63,7 +63,14 @@ def _probability_vectors(
 
     ref, cur = _numeric(reference), _numeric(current)
     edges = np.unique(np.quantile(ref, np.linspace(0.0, 1.0, buckets + 1)))
-    if edges.size < 2:
+    # edges.size < 2 only catches a fully constant reference (1 edge, 0
+    # bins). A 0/1 flag collapses to exactly 2 edges - 1 bin - which can
+    # never separate a shift in the split (e.g. 5% -> 100% ones): every
+    # value from both sides falls in the same single bin and every
+    # bucketed method reports 0 distance. The docstring above already
+    # promises this case the categorical fallback; the threshold needs to
+    # be < 3 (at least 2 bins) to actually deliver it.
+    if edges.size < 3:
         return _category_vectors(ref, cur)
 
     edges = edges.astype(float)
@@ -74,8 +81,13 @@ def _probability_vectors(
 
 
 def _category_vectors(reference, current) -> tuple[np.ndarray, np.ndarray]:
-    ref = np.asarray(reference).ravel()
-    cur = np.asarray(current).ravel()
+    # Cast to str before comparing: a column can be int64 in the reference
+    # and gain a string value (e.g. "unknown") in current, and np.union1d
+    # sorts its concatenated input, which raises TypeError across mixed
+    # dtypes. Categories are compared for identity only, never ordered or
+    # measured, so stringifying first is lossless for this purpose.
+    ref = np.asarray(reference).ravel().astype(str)
+    cur = np.asarray(current).ravel().astype(str)
     if ref.size == 0 or cur.size == 0:
         raise DriftInputError("sample is empty")
     categories = np.union1d(ref, cur)
@@ -287,6 +299,13 @@ def model_based(
     works as a whole-dataset detector over several columns at once."""
     ref = np.asarray(reference, dtype=float)
     cur = np.asarray(current, dtype=float)
+    # Checked before reshape: reshape(0, -1) on a 0-row array raises a bare
+    # ValueError ("cannot reshape array of size 0..."), not DriftInputError
+    # - detect_column_drift only catches DriftInputError per-method, so
+    # that bare ValueError escaped and took down the whole file's report
+    # (e.g. a column that's all-NaN on one side, dropped to empty earlier).
+    if ref.size == 0 or cur.size == 0:
+        raise DriftInputError("sample is empty")
     ref = ref.reshape(len(ref), -1)
     cur = cur.reshape(len(cur), -1)
     if ref.shape[1] != cur.shape[1]:

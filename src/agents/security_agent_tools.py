@@ -339,9 +339,15 @@ def make_tool_implementations(repo_path: str | Path | None = None) -> dict[str, 
     the server's cwd. scan_secrets_regex takes text directly, not a path,
     so it passes through unchanged. Mirrors
     ml_debugger_tools.make_tool_implementations / drift_agent.make_drift_agent's
-    repo_path factory pattern."""
+    repo_path factory pattern.
+
+    Without a checkout there is no repo tree to confine a path to -
+    resolve_repo_path(None, ...) is a no-op (see its docstring), so
+    run_ast_security_scan would open any path the model names, anywhere on
+    the server. Drop it rather than hand it out unconfined; the model
+    still has scan_secrets_regex over the diff text."""
     if repo_path is None:
-        return dict(TOOL_IMPLEMENTATIONS)
+        return {"scan_secrets_regex": scan_secrets_regex}
 
     def _run_ast_security_scan(file_path: str) -> dict[str, Any]:
         return run_ast_security_scan(resolve_repo_path(repo_path, file_path))

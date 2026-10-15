@@ -199,10 +199,12 @@ def test_tool_schemas_names_match_implementations():
     assert schema_names == set(ml_debugger_tools.TOOL_IMPLEMENTATIONS)
 
 
-def test_make_tool_implementations_with_no_repo_path_returns_bare_tools():
+def test_make_tool_implementations_with_no_repo_path_drops_file_reading_tools():
+    """Without a checkout there's no tree to confine a model-supplied path
+    to, so the file-reading tools (which would then open any path on the
+    server) are omitted entirely rather than handed out unconfined."""
     implementations = ml_debugger_tools.make_tool_implementations(None)
-    assert implementations["inspect_dataset_schema"] is ml_debugger_tools.inspect_dataset_schema
-    assert implementations["check_deprecated_api"] is ml_debugger_tools.check_deprecated_api
+    assert implementations == {"check_deprecated_api": ml_debugger_tools.check_deprecated_api}
 
 
 def test_make_tool_implementations_resolves_relative_paths_against_repo_path(tmp_path):

@@ -198,10 +198,12 @@ def test_tool_schemas_names_match_implementations():
     assert schema_names == set(security_agent_tools.TOOL_IMPLEMENTATIONS)
 
 
-def test_make_tool_implementations_with_no_repo_path_returns_bare_tools():
+def test_make_tool_implementations_with_no_repo_path_drops_file_reading_tool():
+    """Without a checkout there's no tree to confine a model-supplied path
+    to, so run_ast_security_scan (which would then open any path on the
+    server) is omitted entirely rather than handed out unconfined."""
     implementations = security_agent_tools.make_tool_implementations(None)
-    assert implementations["scan_secrets_regex"] is security_agent_tools.scan_secrets_regex
-    assert implementations["run_ast_security_scan"] is security_agent_tools.run_ast_security_scan
+    assert implementations == {"scan_secrets_regex": security_agent_tools.scan_secrets_regex}
 
 
 def test_make_tool_implementations_resolves_relative_paths_against_repo_path(tmp_path):

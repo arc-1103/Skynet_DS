@@ -75,11 +75,21 @@ def _encode(
         if is_numeric and not pd.api.types.is_bool_dtype(ref[column]):
             continue
         categorical.append(column)
+        # str() both sides before sorting/encoding: a column can be int64
+        # in one frame and gain a string value in the other (is_numeric is
+        # False whenever either side isn't numeric, which routes it here),
+        # and sorted()/Categorical matching over mixed int/str values
+        # either raises TypeError or silently matches nothing. Only level
+        # identity matters for an ordinal code, so this is lossless. NaN
+        # positions are kept as NaN (not the literal string "nan") so they
+        # still encode to a missing code below.
+        ref_str = ref[column].where(ref[column].isna(), ref[column].astype(str))
+        cur_str = cur[column].where(cur[column].isna(), cur[column].astype(str))
         levels = pd.Index(
-            sorted(set(ref[column].dropna().unique()) | set(cur[column].dropna().unique()))
+            sorted(set(ref_str.dropna().unique()) | set(cur_str.dropna().unique()))
         )
-        for frame in (ref, cur):
-            codes = pd.Categorical(frame[column], categories=levels).codes.astype(float)
+        for frame, str_col in ((ref, ref_str), (cur, cur_str)):
+            codes = pd.Categorical(str_col, categories=levels).codes.astype(float)
             frame[column] = np.where(codes < 0, np.nan, codes)
 
     return ref, cur, categorical

@@ -48,6 +48,28 @@ def test_parse_findings_tolerates_none():
     assert parse_findings("a.py", None) == []
 
 
+def test_parse_findings_drops_an_out_of_diff_line_number_but_keeps_the_finding():
+    """GitHub's review API rejects the *entire* review if one inline
+    comment's line isn't in the diff, so a model-reported line_number
+    outside valid_lines must not reach github_pr_comment.py as-is - but
+    the finding itself is still real content, so it's kept with
+    line_number cleared rather than dropped."""
+    findings = parse_findings(
+        "a.py",
+        [{"line_number": 999, "title": "t", "description": "d"}],
+        valid_lines={1, 2, 3},
+    )
+    assert len(findings) == 1
+    assert findings[0].line_number is None
+
+
+def test_parse_findings_keeps_a_line_number_inside_valid_lines():
+    findings = parse_findings(
+        "a.py", [{"line_number": 2, "title": "t", "description": "d"}], valid_lines={1, 2, 3}
+    )
+    assert findings[0].line_number == 2
+
+
 def test_collect_llm_findings_asks_once_per_file_and_keeps_file_order():
     asked = []
 
@@ -61,6 +83,14 @@ def test_collect_llm_findings_asks_once_per_file_and_keeps_file_order():
 
     assert [f.file_path for f in findings] == ["a.py", "b.py", "c.py"]
     assert len(asked) == 3
+
+
+def test_collect_llm_findings_drops_a_line_number_outside_the_diff():
+    # _file("a.py")'s only added line lands at new-file line 2 (see its patch).
+    findings = collect_llm_findings(
+        [_file("a.py")], "system", lambda s, u: [{"line_number": 999, "title": "t", "description": "d"}]
+    )
+    assert findings[0].line_number is None
 
 
 def test_collect_llm_findings_skips_files_with_no_added_lines():

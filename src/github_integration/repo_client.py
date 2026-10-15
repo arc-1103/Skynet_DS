@@ -112,8 +112,15 @@ def clone_or_checkout(
     this function's own checkout) can still `git show <extra_ref>:<path>`
     against a ref that's actually present locally. ref is always listed
     first in the fetch, so `reset --hard FETCH_HEAD` still resolves to ref
-    itself, not to one of the extra refs, regardless of how many are given."""
-    dest = Path(dest_root) / repo_full_name.split("/")[-1]
+    itself, not to one of the extra refs, regardless of how many are given.
+
+    dest is keyed on the full "owner/repo" (not just the repo name): two
+    different owners can have identically-named repos, and keying on the
+    name alone would make them share one working tree, one lock, and -
+    since an existing dest skips `clone` entirely - one `origin` remote,
+    so a later fetch for the second repo would run against the first
+    repo's remote."""
+    dest = Path(dest_root) / repo_full_name.replace("/", "__")
 
     with _repo_lock(dest):
         auth = _auth_args(token)

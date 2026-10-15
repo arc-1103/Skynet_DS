@@ -32,6 +32,16 @@ def _labels_for(
     return labels
 
 
+def _drop_already_reported(findings: list[ReviewFinding], *earlier: list[ReviewFinding]) -> list[ReviewFinding]:
+    """Titles differ across agents (Security's "Use of eval()" vs
+    Architecture's LLM "Use of eval()" at a different severity), so the
+    per-agent title dedupe can't catch these. A higher-priority agent that
+    already flagged a (file, line) owns it; file-level findings (no line)
+    are never dropped."""
+    taken = {(f.file_path, f.line_number) for group in earlier for f in group if f.line_number is not None}
+    return [f for f in findings if f.line_number is None or (f.file_path, f.line_number) not in taken]
+
+
 def _section(title: str, findings: list[ReviewFinding]) -> str:
     if not findings:
         return f"### {title}\nNo issues found.\n"
@@ -59,8 +69,8 @@ def _drift_section(reports) -> tuple[str, bool]:
 def run_synthesizer_agent(state: AgentState) -> dict:
     """LangGraph node: all specialist outputs -> final_review."""
     security = state.get("security_findings", [])
-    architecture = state.get("architecture_findings", [])
-    ml_debugger = state.get("ml_debugger_findings", [])
+    ml_debugger = _drop_already_reported(state.get("ml_debugger_findings", []), security)
+    architecture = _drop_already_reported(state.get("architecture_findings", []), security, ml_debugger)
     drift_reports = state.get("drift_report", [])
 
     drift_text, drift_flagged = _drift_section(drift_reports)

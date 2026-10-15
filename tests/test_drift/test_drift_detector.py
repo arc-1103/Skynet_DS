@@ -207,3 +207,26 @@ def test_explicit_columns_are_filtered_to_those_present_in_both_frames():
 
     report = detect_dataset_drift(reference, current, columns=["x", "y", "not_a_column"])
     assert [c.column for c in report.columns] == ["x"]
+
+
+def test_column_that_changes_type_does_not_crash_the_dataset_report():
+    """A column that's int on one side and gains a string value on the
+    other (e.g. a new sentinel like "unknown") used to raise TypeError out
+    of np.union1d/np.unique, which escaped detect_column_drift's
+    DriftInputError-only catch and took down the whole dataset report."""
+    reference = pd.DataFrame({"age": list(range(20, 70))})
+    current = pd.DataFrame({"age": list(range(20, 69)) + ["unknown"]})
+    report = detect_dataset_drift(reference, current)
+    assert report.columns[0].column == "age"
+
+
+def test_all_nan_column_is_skipped_not_crashed():
+    """A column that's entirely NaN on one side (e.g. newly added, empty
+    until backfilled) used to crash model_based's reshape before any
+    emptiness check, taking down the whole dataset report."""
+    reference = pd.DataFrame({"a": [np.nan] * 50, "b": range(50)})
+    current = pd.DataFrame({"a": np.arange(50.0), "b": range(50)})
+    report = detect_dataset_drift(reference, current)
+    col_a = next(c for c in report.columns if c.column == "a")
+    assert col_a.results == []
+    assert col_a.drifted is False

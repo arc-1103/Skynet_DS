@@ -46,7 +46,17 @@ def main() -> int:
         print("GITHUB_TOKEN is not set - fetching a public PR anonymously (rate-limited, read-only).")
 
     pr = fetch_pr(args.repo_full_name, args.pr_number, settings.github_token)
-    repo_path = clone_or_checkout(args.repo_full_name, pr.commit_sha, settings.github_token)
+    # extra_refs: on an existing cached clone, only `ref` gets fetched - if
+    # the base branch has moved on since the clone was made, pr.base_sha
+    # (needed by `git show <base_sha>:<path>` for the drift/dashboard
+    # comparisons below) may not be present locally without this. Same
+    # fix as src/worker/jobs.py's call.
+    repo_path = clone_or_checkout(
+        args.repo_full_name,
+        pr.commit_sha,
+        settings.github_token,
+        extra_refs=(pr.base_sha,) if pr.base_sha else (),
+    )
 
     print(f"Running multi-agent review for {args.repo_full_name}#{args.pr_number}...")
     if not langfuse_is_configured():
