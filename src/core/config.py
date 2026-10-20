@@ -19,7 +19,9 @@ class Settings:
     environment lives in from_env() instead, so `Settings(...)` builds
     exactly what it is passed and nothing else."""
 
-    memory_db_path: str = "memory.db"
+    # Relative to the working directory (the repo root, /app in Docker) so a
+    # test that chdirs to tmp_path gets its own copy.
+    memory_db_path: str = "src/memory/memory.db"
     # HMAC secret for verifying GitHub webhook payloads (X-Hub-Signature-256).
     # If unset, signature verification is skipped - fine for local dev, not
     # for anything internet-reachable.
@@ -27,8 +29,19 @@ class Settings:
     # Personal access token (or GitHub App installation token) used to fetch
     # PR metadata/diffs via the GitHub REST API in worker/jobs.py.
     github_token: str | None = None
+    # Redis (or any Celery broker) URL. Set -> jobs run on Celery workers
+    # (src/worker/celery_app.py) and survive a restart of the API process;
+    # unset -> the in-process asyncio queue (src/worker/dispatcher.py).
+    celery_broker_url: str | None = None
     # Local directory PRs are cached to after being pulled from GitHub.
     pr_cache_dir: str = "data/prs"
+    # Where the monitoring sweep leaves its latest drift report / root cause
+    # per model, for the dashboard (demo-ui) to read off the shared volume.
+    monitoring_dir: str = "data/monitoring"
+    # Bearer token for the read-only /results API the dashboard calls. Unset
+    # -> the API is open, like an unset webhook secret: fine for local dev,
+    # not for anything internet-reachable (it serves PR findings).
+    results_api_token: str | None = None
     # Groq API key for the specialist agents' LLM-backed analysis pass
     # (src/agents/llm_client.py). Unset -> agents silently fall back to
     # their deterministic regex checks only.
@@ -71,8 +84,11 @@ class Settings:
         """Build from the current environment, loading .env first."""
         load_dotenv()
         return cls(
+            memory_db_path=os.environ.get("MLCOP_MEMORY_DB_PATH") or cls.memory_db_path,
+            celery_broker_url=os.environ.get("CELERY_BROKER_URL") or None,
             github_webhook_secret=os.environ.get("GITHUB_WEBHOOK_SECRET"),
             github_token=os.environ.get("GITHUB_TOKEN"),
+            results_api_token=os.environ.get("RESULTS_API_TOKEN") or None,
             groq_api_key=os.environ.get("GROQ_API_KEY"),
             # `or` not a get() default: a copied .env with an empty GROQ_MODEL=
             # line sets the variable to "", which get() treats as present.

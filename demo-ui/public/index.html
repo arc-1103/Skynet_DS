@@ -1,60 +1,149 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Skynet_DS — Review Dashboard</title>
+  <meta name="color-scheme" content="dark light" />
+  <title>Skynet_DS — Review Console</title>
+  <script>
+    // Before first paint, so a saved light theme never flashes dark.
+    try {
+      var t = new URLSearchParams(location.search).get("theme") || localStorage.getItem("skynet-theme");
+      if (t === "light" || t === "dark") document.documentElement.dataset.theme = t;
+    } catch (e) {}
+  </script>
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <header class="hero">
-    <div class="hero-inner">
-      <div class="brand">
-        <span class="brand-mark">◎</span>
+  <div class="shell">
+    <aside class="rail" aria-label="Primary">
+      <a class="brand" href="#/overview">
+        <svg class="brand-mark" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><circle cx="8" cy="8" r="2.5"/></svg>
         <span class="brand-name">Skynet_DS</span>
-      </div>
-      <h1 id="pr-title">Loading PR review…</h1>
-      <p id="pr-meta" class="hero-meta"></p>
-      <div class="labels" id="pr-labels"></div>
+      </a>
+      <nav class="rail-nav">
+        <a href="#/overview" data-page="overview"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 2.5h4.5v4.5H2.5zM9 2.5h4.5v4.5H9zM2.5 9h4.5v4.5H2.5zM9 9h4.5v4.5H9z"/></svg>Overview</a>
+        <a href="#/findings" data-page="findings"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 4h8M5.5 8h8M5.5 12h8M2.5 4h.01M2.5 8h.01M2.5 12h.01"/></svg>Findings</a>
+        <a href="#/root-cause" data-page="root-cause"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11zM8 6.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3z"/></svg>Root cause</a>
+        <a href="#/drift" data-page="drift"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 2.5h3v3h-3zM6.5 2.5h3v3h-3zM10.5 2.5h3v3h-3zM2.5 6.5h3v3h-3zM6.5 6.5h3v3h-3zM10.5 6.5h3v3h-3zM2.5 10.5h3v3h-3zM6.5 10.5h3v3h-3zM10.5 10.5h3v3h-3z"/></svg>Drift matrix</a>
+      </nav>
+      <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to light theme">
+        <svg class="icon icon-sun" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 5.2a2.8 2.8 0 1 0 0 5.6 2.8 2.8 0 0 0 0-5.6zM8 1.5v1.3M8 13.2v1.3M1.5 8h1.3M13.2 8h1.3M3.4 3.4l.9.9M11.7 11.7l.9.9M3.4 12.6l.9-.9M11.7 4.3l.9-.9"/></svg>
+        <svg class="icon icon-moon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13 9.5A5.5 5.5 0 0 1 6.5 3a5.5 5.5 0 1 0 6.5 6.5z"/></svg>
+        <span id="theme-label">Light theme</span>
+      </button>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <nav class="crumbs" aria-label="Breadcrumb">
+          <span class="crumb-root">Skynet_DS</span><span class="sep crumb-root" aria-hidden="true">/</span><span id="crumb-repo">—</span><span class="sep" aria-hidden="true">/</span><span class="crumb-current" id="crumb-pr">PR review</span>
+        </nav>
+        <div class="topbar-right" id="source-summary" role="status" aria-live="polite">
+          <span class="chip source loading">Loading data…</span>
+        </div>
+      </header>
+
+      <main>
+        <!-- Overview: verdict, KPIs, one summary card per category -->
+        <section class="page" data-page="overview" aria-labelledby="pr-title">
+          <div class="page-head">
+            <h1 id="pr-title" tabindex="-1"><span class="skel skel-title" aria-hidden="true"></span><span class="sr-only">Loading review…</span></h1>
+            <p class="meta" id="pr-meta"></p>
+            <div class="labels" id="pr-labels"></div>
+          </div>
+          <div class="kpis" id="kpis" aria-busy="true">
+            <div class="kpi skeleton"><span class="skel w40"></span><span class="skel h24 w60"></span><span class="skel w90"></span></div>
+            <div class="kpi skeleton"><span class="skel w40"></span><span class="skel h24 w30"></span><span class="skel w90"></span></div>
+            <div class="kpi skeleton"><span class="skel w40"></span><span class="skel h24 w50"></span><span class="skel w90"></span></div>
+            <div class="kpi skeleton"><span class="skel w40"></span><span class="skel h24 w40"></span><span class="skel w90"></span></div>
+          </div>
+          <div class="cards" id="overview-cards">
+            <div class="panel card skeleton"><div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel"></span><span class="skel"></span></div></div>
+            <div class="panel card skeleton"><div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel"></span><span class="skel"></span></div></div>
+            <div class="panel card skeleton"><div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel"></span><span class="skel"></span></div></div>
+          </div>
+        </section>
+
+        <!-- Findings -->
+        <section class="page" data-page="findings" aria-labelledby="findings-title" hidden>
+          <div class="page-head">
+            <h1 id="findings-title" tabindex="-1">Findings</h1>
+            <p class="meta page-context"></p>
+          </div>
+          <section class="panel" id="findings" aria-labelledby="findings-h">
+            <div class="panel-head">
+              <h2 id="findings-h">Inline findings <span class="count" id="findings-count">–</span></h2>
+              <span class="chip source loading" id="source-pr-review">Loading</span>
+            </div>
+            <div class="toolbar" id="findings-toolbar" hidden>
+              <div class="filters" id="severity-filters" role="group" aria-label="Filter by severity"></div>
+            </div>
+            <div id="findings-body">
+              <div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel"></span><span class="skel"></span></div>
+            </div>
+          </section>
+        </section>
+
+        <!-- Root cause: the gate beside the ranking it governs -->
+        <section class="page" data-page="root-cause" aria-labelledby="rc-title" hidden>
+          <div class="page-head">
+            <h1 id="rc-title" tabindex="-1">Root-cause candidates</h1>
+            <p class="meta page-context"></p>
+          </div>
+          <div class="rc-grid">
+            <section class="panel" id="rc-gate" aria-labelledby="rc-gate-h">
+              <div class="panel-head">
+                <h2 id="rc-gate-h">Attribution gate</h2>
+                <span class="chip source loading" id="source-root-cause">Loading</span>
+              </div>
+              <div id="rc-gate-body">
+                <div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel"></span></div>
+              </div>
+            </section>
+            <section class="panel" id="root-cause" aria-labelledby="rc-h">
+              <div class="panel-head">
+                <h2 id="rc-h">Feature ranking</h2>
+              </div>
+              <div id="rc-body">
+                <div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel"></span><span class="skel"></span></div>
+              </div>
+            </section>
+          </div>
+        </section>
+
+        <!-- Drift matrix -->
+        <section class="page" data-page="drift" aria-labelledby="drift-title" hidden>
+          <div class="page-head">
+            <h1 id="drift-title" tabindex="-1">Drift detector matrix</h1>
+            <p class="meta page-context"></p>
+          </div>
+          <section class="panel signature" id="drift" aria-labelledby="drift-h">
+            <div class="panel-head">
+              <h2 id="drift-h">Detectors by feature <span class="subject" id="drift-label"></span></h2>
+              <span class="chip source loading" id="source-drift">Loading</span>
+            </div>
+            <p class="caption"><span>Drift is assessed using multiple complementary detectors. Individual detector results provide evidence about distribution changes; interpret them together rather than assuming that every changed feature represents meaningful drift.</span></p>
+            <div id="drift-body">
+              <div class="skel-rows" aria-hidden="true"><span class="skel"></span><span class="skel"></span><span class="skel"></span><span class="skel"></span></div>
+            </div>
+          </section>
+        </section>
+      </main>
+
+      <footer>
+        <dl class="provenance" aria-label="What the data labels mean">
+          <div><dt><span class="chip source live">Live</span></dt><dd>The Python core's latest output (PR reviews, monitoring sweep), with its update time.</dd></div>
+          <div><dt><span class="chip source stale">Stale</span></dt><dd>Live monitoring output older than the freshness window; the sweep may have stopped.</dd></div>
+          <div><dt><span class="chip source sample">Sample</span></dt><dd>Bundled demonstration fixture. Not computed from any live review or model.</dd></div>
+          <div><dt><span class="chip source unavailable">Unavailable</span></dt><dd>The API returned nothing usable. Nothing is shown in its place.</dd></div>
+        </dl>
+        <p class="footnote">Read-only view of the Python core (<code>src/agents</code>, <code>src/drift</code>). <span id="data-mode"></span> <span id="data-source"></span></p>
+      </footer>
     </div>
-    <div class="hero-status" id="pr-status">—</div>
-  </header>
+  </div>
 
-  <main>
-    <section class="panel">
-      <h2>Findings <span class="count-pill" id="findings-count">0</span></h2>
-      <div class="findings" id="findings-list"></div>
-    </section>
-
-    <section class="panel">
-      <h2>Data Drift — <span id="drift-label"></span></h2>
-      <p class="panel-sub" id="drift-summary"></p>
-      <div class="table-wrap">
-        <table class="drift-table" id="drift-table">
-          <thead>
-            <tr>
-              <th>Column</th>
-              <th>Kind</th>
-              <th>Verdict</th>
-              <th>Detectors</th>
-            </tr>
-          </thead>
-          <tbody id="drift-tbody"></tbody>
-        </table>
-      </div>
-    </section>
-
-    <section class="panel">
-      <h2>Root Cause — Feature Attribution</h2>
-      <p class="panel-sub" id="rootcause-summary"></p>
-      <div id="attribution-list" class="attributions"></div>
-    </section>
-  </main>
-
-  <footer>
-    <p>Demo UI only — analysis runs in the Python core (<code>src/agents</code>, <code>src/drift</code>). Sample data shown.</p>
-  </footer>
-
+  <div class="tooltip" id="tooltip" role="tooltip" hidden></div>
   <script src="/app.js"></script>
 </body>
 </html>

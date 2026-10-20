@@ -15,11 +15,13 @@ data/
 .env.example
 
 # Docs, planning notes, graph output, and the demo surfaces - none of this
-# is needed to run the webhook service the Dockerfile builds.
+# is needed by the core image. evals/ stays in: the image runs it. The demo
+# image (demo/Dockerfile) has its own ignore file, demo/Dockerfile.dockerignore.
 *.md
 graphify-out/
 demo/
 demo-ui/
-evals/
 tests/
 .vscode/
+.impeccable/
+**/node_modules/

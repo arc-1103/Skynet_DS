@@ -107,3 +107,36 @@ def test_rank_without_history_is_unchanged():
     graph.add_candidate(CauseCandidate(kind="code", description="x", confidence=0.3))
     graph.add_candidate(CauseCandidate(kind="config", description="y", confidence=0.8))
     assert [c.kind for c in graph.rank(history=[])] == ["config", "code"]
+
+
+def _verdicts(*kinds):
+    return [CauseCandidate(kind=k, description="past", confidence=0.7) for k in kinds]
+
+
+def _ranked(history, **confidences):
+    graph = CausalGraph()
+    for kind, confidence in confidences.items():
+        graph.add_candidate(CauseCandidate(kind=kind, description=kind, confidence=confidence))
+    return graph.rank(history=history)
+
+
+def test_history_breaks_a_near_tie_toward_the_usual_culprit():
+    past = _verdicts("config", "config", "config", "config")
+    assert [c.kind for c in _ranked(past, code=0.52, config=0.50)] == ["config", "code"]
+    # same evidence, no history: the evidence alone decides
+    assert [c.kind for c in _ranked([], code=0.52, config=0.50)] == ["code", "config"]
+
+
+def test_history_does_not_overrule_a_clear_evidence_gap():
+    past = _verdicts("config", "config", "config", "config", "config", "config")
+    assert [c.kind for c in _ranked(past, code=0.9, config=0.4)] == ["code", "config"]
+
+
+def test_short_history_is_ignored():
+    past = _verdicts("config", "config")
+    assert [c.kind for c in _ranked(past, code=0.52, config=0.50)] == ["code", "config"]
+
+
+def test_history_prior_keeps_confidence_in_bounds():
+    past = _verdicts("config", "config", "config", "config")
+    assert all(0 <= c.confidence <= 1 for c in _ranked(past, config=1.0, code=0.0))

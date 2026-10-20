@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import ValidationError
 
+from src.api.results import router as results_router
 from src.core.config import Settings, get_settings
 from src.core.tracing import langfuse
 from src.schemas.webhook import GitHubDeploymentStatusEvent, GitHubPullRequestEvent
@@ -26,6 +27,8 @@ async def _lifespan(_app: FastAPI):
     queue, started with the server. Off unless both a sweep period and a
     Prometheus to read from are configured."""
     settings = get_settings()
+    if not settings.results_api_token:
+        logger.warning("RESULTS_API_TOKEN not set - the /results API is open to anyone who can reach this service")
     if settings.monitor_interval_seconds > 0 and settings.prometheus_url:
         queue.schedule_every(run_monitoring_sweep, interval_seconds=settings.monitor_interval_seconds)
         logger.info("monitoring sweep every %ss", settings.monitor_interval_seconds)
@@ -35,6 +38,13 @@ async def _lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="ML Reliability Copilot - Webhook Receiver", lifespan=_lifespan)
+app.include_router(results_router)
+
+
+@app.get("/healthz")
+def healthz() -> dict:
+    """Liveness probe for the container healthcheck - process up, nothing deeper."""
+    return {"status": "ok"}
 
 # Wait this long post-deploy before checking metrics, per Workflow.md
 # Workflow 4 ("1hr post-deploy, enough data to compare").

@@ -1,0 +1,24 @@
+# Ignore rules for demo/Dockerfile only (BuildKit reads <Dockerfile>.dockerignore
+# in place of the root .dockerignore). Same as the root file, except demo/
+# is kept - minus its generated output and tests.
+.git
+.venv/
+src/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+data/
+*.db
+.env
+.env.example
+*.md
+graphify-out/
+demo-ui/
+evals/
+tests/
+.vscode/
+.impeccable/
+**/node_modules/
+demo/out/
+demo/tests/
