@@ -19,6 +19,7 @@ from src.drift.detector import detect_dataset_drift
 from src.drift.pr_drift import data_files_in_pr
 from src.drift.root_cause import explain_drift
 from src.drift.tables import frame_from_features
+from src.github_integration.fix_pr import open_fix_pr
 from src.github_integration.pr_client import fetch_pr
 from src.github_integration.repo_client import clone_or_checkout
 from src.memory.sqlite_store import SQLiteStore
@@ -295,3 +296,21 @@ def _run_pr_code_review(repo_full_name: str, pr_number: int, head_sha: str) -> N
         [label.value for label in review.labels],
         review_path,
     )
+
+    _maybe_open_fix_pr(repo_full_name, pr_number, review)
+
+
+def _maybe_open_fix_pr(repo_full_name: str, pr_number: int, review) -> None:
+    """Opt-in (MLCOP_OPEN_FIX_PRS). A failure here must not fail the review
+    job: the review is already cached, and a fix PR is a convenience."""
+    if settings.fix_pr_mode == "off":
+        return
+    if not settings.github_token:
+        logger.warning("MLCOP_OPEN_FIX_PRS=%s but GITHUB_TOKEN is not set - no fix PR", settings.fix_pr_mode)
+        return
+    try:
+        open_fix_pr(
+            repo_full_name, pr_number, review, settings.github_token, dry_run=settings.fix_pr_mode == "dry-run"
+        )
+    except Exception:  # noqa: BLE001 - GitHub/network errors of every kind
+        logger.exception("fix PR for #%s failed", pr_number)

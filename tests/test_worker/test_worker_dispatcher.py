@@ -69,10 +69,10 @@ async def test_schedule_every_repeats_and_survives_a_failing_run():
 
 # --- Celery backend (CELERY_BROKER_URL set) ---------------------------------
 
-from dataclasses import replace  # noqa: E402
+from dataclasses import replace
 
-from src.worker import celery_app as celery_module  # noqa: E402
-from src.worker import dispatcher, jobs  # noqa: E402
+from src.worker import celery_app as celery_module
+from src.worker import dispatcher, jobs
 
 
 @pytest.fixture

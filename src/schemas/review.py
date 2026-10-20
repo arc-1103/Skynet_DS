@@ -37,6 +37,15 @@ class PRLabel(str, Enum):
         return self.value.split(":")[1].strip()
 
 
+class LineFix(BaseModel):
+    """An exact, mechanical one-line patch - unlike `suggestion`, which is
+    prose. Safe to apply only if the file still has `old_line` at the
+    finding's line_number (github_integration/fix_pr.py checks that)."""
+
+    old_line: str = Field(..., description="The line's full text as added by the PR")
+    new_line: str = Field(..., description="The same line with the fix applied")
+
+
 class ReviewFinding(BaseModel):
     file_path: str = Field(..., description="Target file path relative to repo root")
     line_number: Optional[int] = Field(
@@ -50,6 +59,11 @@ class ReviewFinding(BaseModel):
     )
     suggestion: Optional[str] = Field(
         None, description="Suggested refactored code snippet or fix"
+    )
+    fix: Optional[LineFix] = Field(
+        None,
+        description="Exact one-line patch, set only by deterministic checks that can "
+        "produce one - never by LLM findings. Eligible for an automated fix PR.",
     )
 
 

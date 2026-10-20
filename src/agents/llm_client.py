@@ -45,6 +45,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Groq's on_demand tier rejects any single request asking for more than its
+# 1000 output-tokens-per-minute limit (429 'Request too large'), so a larger
+# cap made every review-agent call fail open. Raise this with the tier.
+_MAX_OUTPUT_TOKENS = 900
+
 # Guards against a model that never stops requesting tool calls.
 _MAX_TOOL_ROUNDS = 6
 
@@ -136,7 +141,7 @@ def call_llm_findings(system_prompt: str, user_prompt: str) -> list[dict[str, An
             response_format={"type": "json_object"},
             reasoning_effort="none",
             temperature=0.1,
-            max_tokens=2048,
+            max_tokens=_MAX_OUTPUT_TOKENS,
         )
         content = response.choices[0].message.content
     except Exception:  # Groq/network/SDK errors must never take the review down
@@ -245,7 +250,7 @@ def call_llm_with_tools(
                 tools=tools,
                 tool_choice="auto",
                 temperature=0.1,
-                max_tokens=2048,
+                max_tokens=_MAX_OUTPUT_TOKENS,
             )
             message = response.choices[0].message
             tool_calls = getattr(message, "tool_calls", None)
