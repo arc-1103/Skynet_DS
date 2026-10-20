@@ -11,5 +11,5 @@ Execution.md
 Workflow.md
 .env
 .vscode/
-
+.claude/
 graphify-out/
