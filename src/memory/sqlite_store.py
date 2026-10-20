@@ -33,8 +33,10 @@ class SQLiteStore:
     the same Protocol - nothing in agents/, graph/, or tools/ should import
     sqlite3 directly."""
 
-    def __init__(self, db_path: str = "memory.db") -> None:
+    def __init__(self, db_path: str = "src/memory/memory.db") -> None:
         self._path = Path(db_path)
+        if db_path != ":memory:":
+            self._path.parent.mkdir(parents=True, exist_ok=True)
         self._conn = sqlite3.connect(self._path)
         self._conn.executescript(_SCHEMA)
         self._conn.commit()

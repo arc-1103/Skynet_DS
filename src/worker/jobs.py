@@ -17,6 +17,7 @@ from src.agents.orchestrator import diagnose, diagnose_drift, drift_signature
 from src.core.config import settings
 from src.drift.detector import detect_dataset_drift
 from src.drift.pr_drift import data_files_in_pr
+from src.drift.root_cause import explain_drift
 from src.drift.tables import frame_from_features
 from src.github_integration.pr_client import fetch_pr
 from src.github_integration.repo_client import clone_or_checkout
@@ -125,8 +126,10 @@ def check_drift(model_id: str, now: datetime | None = None) -> str | None:
         report = detect_dataset_drift(
             frame_from_features(baseline.features), frame_from_features(current.features), label=model_id
         )
+        _publish(model_id, "drift", report)
         active = store.get_active_drift(model_id)
         if not report.dataset_drifted:
+            _publish(model_id, "root_cause", None)  # a stale attribution would outlive its drift
             if active:
                 store.set_active_drift(model_id, None)
                 logger.info("drift episode for %s resolved (%s)", model_id, active)
@@ -137,6 +140,15 @@ def check_drift(model_id: str, now: datetime | None = None) -> str | None:
         if signature == active:
             logger.info("drift for %s is still ongoing (%s) - already reported", model_id, signature)
             return None
+
+        try:
+            # ponytail: a second SHAP fit per episode (diagnose_drift runs its own);
+            # return the attribution from diagnose_drift if the fit cost matters
+            _publish(model_id, "root_cause", explain_drift(
+                frame_from_features(baseline.features), frame_from_features(current.features), label=model_id
+            ))
+        except ValueError:  # too few rows to fit the surrogate, same case diagnose_drift tolerates
+            pass
 
         # the model's own repo if a deploy mapping names one, else GITHUB_REPO
         repo = next((r for r, m in settings.repo_models.items() if m == model_id), settings.github_repo)
@@ -150,6 +162,21 @@ def check_drift(model_id: str, now: datetime | None = None) -> str | None:
     logger.warning("drift diagnosed for %s:\n%s", model_id, result.explanation)
     notify_slack(settings.slack_webhook_url, f"Drift detected on {model_id}", result.explanation)
     return result.explanation
+
+
+def _publish(model_id: str, kind: str, payload) -> None:
+    """Leave the model's latest `kind` ("drift" | "root_cause") where the
+    dashboard reads it; None removes it. Best effort - the dashboard is a
+    view, so a full or read-only disk must not fail the drift check."""
+    path = Path(settings.monitoring_dir) / f"{re.sub(r'[^A-Za-z0-9._-]+', '_', model_id)}.{kind}.json"
+    try:
+        if payload is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(payload.model_dump_json(indent=2), encoding="utf-8")
+    except OSError:
+        logger.warning("could not publish %s for %s to %s", kind, model_id, path, exc_info=True)
 
 
 def monitored_models() -> tuple[str, ...]:

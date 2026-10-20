@@ -181,6 +181,27 @@ def test_check_drift_captures_a_baseline_then_diagnoses_drift(prometheus, slack)
     assert SQLiteStore(jobs.settings.memory_db_path).get_diagnosis_history("fraud-clf")
 
 
+def test_check_drift_publishes_for_the_dashboard_and_clears_root_cause_when_clean(prometheus):
+    from pathlib import Path
+
+    from src.schemas.drift import DatasetDriftReport
+    from src.schemas.root_cause import DriftRootCause
+
+    out = Path(jobs.settings.monitoring_dir)
+    prometheus += [_sample("fraud-clf", 0), _sample("fraud-clf", 3), _sample("fraud-clf", 0.02)]
+
+    jobs.check_drift("fraud-clf")  # baseline: nothing to publish yet
+    assert not out.exists()
+
+    jobs.check_drift("fraud-clf")  # drifted episode
+    assert DatasetDriftReport.model_validate_json((out / "fraud-clf.drift.json").read_text()).dataset_drifted
+    assert DriftRootCause.model_validate_json((out / "fraud-clf.root_cause.json").read_text()).separable
+
+    jobs.check_drift("fraud-clf")  # clean again
+    assert not DatasetDriftReport.model_validate_json((out / "fraud-clf.drift.json").read_text()).dataset_drifted
+    assert not (out / "fraud-clf.root_cause.json").exists()
+
+
 def test_check_drift_does_not_baseline_an_empty_window(prometheus):
     from src.memory.sqlite_store import SQLiteStore
     from src.schemas.telemetry import FeatureSample

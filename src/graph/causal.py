@@ -1,7 +1,7 @@
 # src/graph/causal.py
 from collections import defaultdict
 from statistics import fmean
-from typing import Any, Literal
+from typing import Any, Literal, get_args
 
 from pydantic import BaseModel, Field
 
@@ -17,16 +17,39 @@ class CauseCandidate(BaseModel):
     evidence_refs: list[str] = Field(default_factory=list)
 
 
+# A prior is a tie-breaker, not a verdict: at the max weight a kind that was
+# every past verdict scales confidence by ~1.37x and one never seen by
+# ~0.88x, so a clear evidence gap survives but a near-tie follows history.
+HISTORY_WEIGHT = 0.5
+# Below this many past verdicts a "pattern" is one or two coin flips.
+MIN_HISTORY = 3
+_KINDS = get_args(Kind)
+
+
 def apply_history_prior(candidates: list[CauseCandidate], history: list[CauseCandidate]) -> list[CauseCandidate]:
     """Adjust candidate confidences using this model's past verdicts
     (Workflow.md "Cross-Workflow Notes": 'config changes to learning_rate
     have historically been the cause 70% of the time for this model
     family'). `history` is newest-first, one top verdict per past diagnosis.
 
-    Must return candidates with confidence still in [0, 1]; ordering is
-    done by the caller."""
-    # TODO(user): decide how much past verdicts should move today's scores.
-    return candidates
+    Each candidate is scaled by how over- or under-represented its kind is
+    in `history` (Laplace-smoothed share vs. the uniform 1/len(kinds)),
+    times HISTORY_WEIGHT. Confidence stays in [0, 1]; ordering is done by
+    the caller.
+
+    ponytail: a verdict is saved whether or not it was right, so a wrong
+    top pick reinforces itself. Nothing records which past verdicts a
+    human confirmed; weight only confirmed ones if that feedback exists."""
+    if len(history) < MIN_HISTORY:
+        return candidates
+    uniform = 1 / len(_KINDS)
+
+    def scaled(c: CauseCandidate) -> CauseCandidate:
+        share = (sum(h.kind == c.kind for h in history) + 1) / (len(history) + len(_KINDS))
+        factor = 1 + HISTORY_WEIGHT * (share - uniform)
+        return c.model_copy(update={"confidence": min(1.0, c.confidence * factor)})
+
+    return [scaled(c) for c in candidates]
 
 
 class CausalGraph:

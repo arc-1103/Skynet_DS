@@ -65,3 +65,67 @@ async def test_schedule_every_repeats_and_survives_a_failing_run():
     q.cancel_all()
     await asyncio.sleep(0.01)  # cancellation lands, then its done-callback runs
     assert q.pending_count() == 0
+
+
+# --- Celery backend (CELERY_BROKER_URL set) ---------------------------------
+
+from dataclasses import replace  # noqa: E402
+
+from src.worker import celery_app as celery_module  # noqa: E402
+from src.worker import dispatcher, jobs  # noqa: E402
+
+
+@pytest.fixture
+def celery_on(monkeypatch):
+    monkeypatch.setattr(dispatcher, "settings", replace(dispatcher.settings, celery_broker_url="redis://x/0"))
+
+
+def test_schedule_sends_known_job_to_celery_with_countdown(celery_on, monkeypatch):
+    sent = []
+    monkeypatch.setattr(
+        celery_module.pr_code_review, "apply_async", lambda **kw: sent.append(kw)
+    )
+    q = DelayedTaskQueue()
+    q.schedule(
+        jobs.run_pr_code_review,
+        {"repo_full_name": "o/r", "pr_number": 3, "head_sha": "abc123"},
+        delay_seconds=0,
+    )
+    assert sent == [{"kwargs": {"repo_full_name": "o/r", "pr_number": 3, "head_sha": "abc123"}, "countdown": 0}]
+    assert q.pending_count() == 0  # nothing held in this process
+
+
+def test_schedule_unknown_job_with_celery_fails_loudly(celery_on):
+    async def mystery():
+        pass
+
+    with pytest.raises(ValueError, match="mystery"):
+        DelayedTaskQueue().schedule(mystery, delay_seconds=0)
+
+
+@pytest.mark.asyncio
+async def test_schedule_every_defers_to_celery_beat(celery_on):
+    q = DelayedTaskQueue()
+    q.schedule_every(jobs.run_monitoring_sweep, interval_seconds=60)
+    assert q.pending_count() == 0
+
+
+def test_every_async_job_has_a_celery_task():
+    # a new job added to jobs.py without a task would only fail once Celery is on
+    async_jobs = {n for n in dir(jobs) if n.startswith("run_") and asyncio.iscoroutinefunction(getattr(jobs, n))}
+    assert async_jobs == set(celery_module.TASKS)
+
+
+def test_task_runs_the_job_body(monkeypatch):
+    called = []
+    monkeypatch.setattr(jobs, "_run_deployment_regression_check", lambda *a: called.append(a))
+    celery_module.deployment_regression_check.apply(args=("o/r", "abc123", "prod")).get()
+    assert called == [("o/r", "abc123", "prod")]
+
+
+def test_monitoring_sweep_fans_out_one_task_per_model(monkeypatch):
+    monkeypatch.setattr(jobs, "monitored_models", lambda: ("a", "b"))
+    queued = []
+    monkeypatch.setattr(celery_module.drift_check, "delay", queued.append)
+    celery_module.monitoring_sweep.apply().get()
+    assert queued == ["a", "b"]

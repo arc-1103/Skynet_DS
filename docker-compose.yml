@@ -1,29 +1,152 @@
-# Local convenience for building/running the image before pushing it to a
-# cloud registry - not required by any cloud container platform, which
-# take the Dockerfile directly. No other services (no Redis/Postgres): the
-# app is one process, an in-process asyncio worker queue and a SQLite
-# store, per src/worker/dispatcher.py and src/memory/sqlite_store.py.
+# The whole project, containerized. By default no Redis/Postgres: the core is
+# one process with an in-process asyncio worker queue and a SQLite store (see
+# src/worker/dispatcher.py, src/memory/sqlite_store.py). The `queue` profile
+# adds Redis + a Celery worker for jobs that survive a restart:
+#   set CELERY_BROKER_URL=redis://redis:6379/0 in .env, then
+#   docker compose --profile queue up --build
+#
+#   docker compose up --build                          # webhook :8000, dashboard :3000, prometheus :9090
+#   docker compose run --rm cli debug --run-id run-004 # core CLI (profile: tools)
+#   docker compose run --rm --entrypoint python cli -m evals.run_eval
+#   docker compose run --rm demo owner/repo 42         # demo layer (profile: demo)
+#
+# Config comes from .env (copy .env.example). It is optional so `up` works
+# out of the box against the fake telemetry backend; set RESULTS_API_TOKEN
+# before exposing anything publicly.
+
+x-env: &env
+  env_file:
+    - path: .env
+      required: false
+
 services:
+  # Webhook receiver + worker + read-only /results API (Dockerfile).
   webhook:
     build: .
+    image: skynet-ds/core
+    <<: *env
+    environment:
+      # The bundled Prometheus, unless .env points elsewhere. Drift checks
+      # and the monitoring sweep still need MLCOP_MONITOR_INTERVAL_SECONDS
+      # > 0 and a model exporting mlcop_feature_value.
+      PROMETHEUS_URL: ${PROMETHEUS_URL:-http://prometheus:9090}
     ports:
       - "8000:8000"
-    env_file:
-      - .env
     volumes:
-      # data/prs (PR review cache) and data/repos (git clone cache) -
-      # settings.pr_cache_dir and repo_client.py's clone_or_checkout
-      # default. Without this, both reset on every container restart.
+      # data/prs (PR review cache), data/monitoring (sweep output), data/repos
+      # (git clone cache). Without this, all three reset on every restart.
       - skynet-data:/app/data
+    restart: unless-stopped
 
-  # Read by PrometheusAdapter (set PROMETHEUS_URL=http://prometheus:9090).
-  # Scrape targets live in prometheus.yml.
+  # Durable job queue (profile: queue). Needs CELERY_BROKER_URL in .env so the
+  # webhook service enqueues here instead of running jobs in-process.
+  redis:
+    image: redis:7-alpine
+    profiles: ["queue"]
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  # Runs the jobs the webhook service enqueues. -B embeds the scheduler that
+  # fires the monitoring sweep (MLCOP_MONITOR_INTERVAL_SECONDS > 0).
+  # ponytail: -B is for exactly one worker; run `celery beat` as its own
+  # service before scaling this past one replica, or the sweep fires N times.
+  worker:
+    build: .
+    image: skynet-ds/core
+    profiles: ["queue"]
+    <<: *env
+    environment:
+      PROMETHEUS_URL: ${PROMETHEUS_URL:-http://prometheus:9090}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
+      # on the volume, so diagnosis history and drift baselines outlive the container
+      MLCOP_MEMORY_DB_PATH: /app/data/memory.db
+    command: ["celery", "-A", "src.worker.celery_app", "worker", "-B", "-l", "info", "--concurrency", "2"]
+    volumes:
+      - skynet-data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Dashboard on :3000 (demo-ui/Dockerfile). Reads the webhook service's
+  # /results API over HTTP - no shared volume, so the two can be deployed
+  # separately. RESULTS_API_TOKEN from .env is passed through as its token.
+  dashboard:
+    build: ./demo-ui
+    image: skynet-ds/dashboard
+    environment:
+      SKYNET_API_URL: http://webhook:8000
+      SKYNET_API_TOKEN: ${RESULTS_API_TOKEN:-}
+      SKYNET_DATA_MODE: ${SKYNET_DATA_MODE:-auto}
+    ports:
+      - "${DASHBOARD_PORT:-3000}:3000"
+    depends_on:
+      webhook:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Read by PrometheusAdapter. Scrape targets live in prometheus.yml.
   prometheus:
     image: prom/prometheus:v2.55.1
     ports:
       - "9090:9090"
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    # prometheus.yml's placeholder target is host.docker.internal; this makes
+    # that name resolve on Linux too (Docker Desktop provides it already).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:9090/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    restart: unless-stopped
+
+  # SIMULATED model for demos (profile: demo): exports synthetic features that
+  # drift after DEMO_DRIFT_AFTER seconds, so the drift panels show something
+  # without a real model. A real model calls src.observability.exporter.observe().
+  exporter:
+    build: .
+    image: skynet-ds/core
+    profiles: ["demo"]
+    command: ["python", "-m", "src.observability.exporter", "--model", "fraud-clf", "--port", "9091", "--drift-after", "${DEMO_DRIFT_AFTER:-600}"]
+    restart: unless-stopped
+
+  # One-off core CLI runs on the same image and data volume as the webhook.
+  cli:
+    build: .
+    image: skynet-ds/core
+    profiles: ["tools"]
+    <<: *env
+    environment:
+      PROMETHEUS_URL: ${PROMETHEUS_URL:-http://prometheus:9090}
+    entrypoint: ["python", "-m", "src.cli"]
+    volumes:
+      - skynet-data:/app/data
+
+  # Demo layer (demo/Dockerfile). Evidently dashboards land in ./demo/out on
+  # the host; the PR clone cache is shared with the webhook service.
+  demo:
+    build:
+      context: .
+      dockerfile: demo/Dockerfile
+    image: skynet-ds/demo
+    profiles: ["demo"]
+    <<: *env
+    volumes:
+      - skynet-data:/app/data
+      - ./demo/out:/app/demo/out
 
 volumes:
   skynet-data:
+  prometheus-data:
+  redis-data:

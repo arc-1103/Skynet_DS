@@ -14,10 +14,14 @@ export interface ReviewFinding {
   suggestion: string | null;
 }
 
+// pr_id / pr_title / repo_full_name / commit_sha / base_ref are not in the
+// Python FinalPRReview: the server joins them in from the cached PRPayload.
 export interface FinalPRReview {
-  pr_id: number;
-  pr_title: string;
-  repo_full_name: string;
+  pr_id?: number;
+  pr_title?: string;
+  repo_full_name?: string;
+  commit_sha?: string;
+  base_ref?: string;
   labels: string[];
   overall_passed: boolean;
   markdown_summary: string;
