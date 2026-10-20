@@ -13,6 +13,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from pydantic import ValidationError
 
 from src.core.config import Settings, get_settings
+from src.core.tracing import langfuse
 from src.schemas.webhook import GitHubDeploymentStatusEvent, GitHubPullRequestEvent
 from src.worker.dispatcher import queue
 from src.worker.jobs import run_deployment_regression_check, run_monitoring_sweep, run_pr_code_review
@@ -30,6 +31,7 @@ async def _lifespan(_app: FastAPI):
         logger.info("monitoring sweep every %ss", settings.monitor_interval_seconds)
     yield
     queue.cancel_all()
+    langfuse.flush()
 
 
 app = FastAPI(title="ML Reliability Copilot - Webhook Receiver", lifespan=_lifespan)

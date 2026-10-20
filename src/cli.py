@@ -11,6 +11,7 @@ import argparse
 
 from src.agents.orchestrator import compare, diagnose
 from src.core.config import settings
+from src.core.tracing import langfuse
 from src.memory.sqlite_store import SQLiteStore
 from src.observability.base import build_adapter
 from src.retrieval.evidence import EvidenceRetriever
@@ -55,4 +56,7 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        langfuse.flush()  # short-lived process: send traces before exit

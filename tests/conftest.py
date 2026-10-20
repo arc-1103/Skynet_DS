@@ -1,5 +1,10 @@
+import os
 import sys
 from dataclasses import replace
+
+# Before any src import: the Langfuse client reads this once at construction,
+# and a developer's .env keys must not ship test runs to the real project.
+os.environ["LANGFUSE_TRACING_ENABLED"] = "false"
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

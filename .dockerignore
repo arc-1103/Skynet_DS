@@ -1,0 +1,25 @@
+# Keeps the build context small and out of the image - mirrors .gitignore
+# plus Docker-specific exclusions. src/.venv is the big one: the dev
+# virtualenv lives *inside* src/ on this machine, not at the repo root, and
+# its Windows-compiled wheels have no business in a Linux image.
+.git
+.venv/
+src/.venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+data/
+*.db
+.env
+.env.example
+
+# Docs, planning notes, graph output, and the demo surfaces - none of this
+# is needed to run the webhook service the Dockerfile builds.
+*.md
+graphify-out/
+demo/
+demo-ui/
+evals/
+tests/
+.vscode/

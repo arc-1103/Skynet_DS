@@ -1,0 +1,10 @@
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  # Model services export mlcop_feature_value{model,feature} on /metrics.
+  # Replace the target with your model's host:port (compose service name,
+  # or host.docker.internal for a process running on the host).
+  - job_name: models
+    static_configs:
+      - targets: ["host.docker.internal:9090"]

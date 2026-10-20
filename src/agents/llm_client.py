@@ -29,6 +29,7 @@ from functools import lru_cache
 from typing import TYPE_CHECKING, Any, Callable
 
 from src.core.config import settings
+from src.core.tracing import langfuse
 
 if TYPE_CHECKING:
     # Only for type-checking - importing groq's TypedDicts here (instead of
@@ -59,6 +60,50 @@ def _client():
     return Groq(api_key=settings.groq_api_key)
 
 
+def _chat(name: str, **kwargs: Any):
+    """One Groq chat completion, recorded as a Langfuse generation (the Groq
+    SDK has no Langfuse auto-instrumentation). Errors are re-raised so every
+    caller keeps its own fail-open handling."""
+    with langfuse.start_as_current_observation(
+        as_type="generation",
+        name=name,
+        model=kwargs["model"],
+        input=kwargs["messages"],
+        model_parameters={
+            k: kwargs[k] for k in ("temperature", "max_tokens", "reasoning_effort") if k in kwargs
+        },
+        metadata={"tools": [t.get("function", {}).get("name") for t in kwargs.get("tools", [])]},
+    ) as generation:
+        try:
+            response = _client().chat.completions.create(**kwargs)
+        except Exception as exc:
+            generation.update(level="ERROR", status_message=str(exc))
+            raise
+        choice = response.choices[0]
+        message = choice.message
+        output: dict[str, Any] = {"role": "assistant", "content": message.content}
+        if tool_calls := getattr(message, "tool_calls", None):
+            output["tool_calls"] = [
+                {
+                    "id": call.id,
+                    "type": "function",
+                    "function": {"name": call.function.name, "arguments": call.function.arguments},
+                }
+                for call in tool_calls
+            ]
+        usage = getattr(response, "usage", None)
+        generation.update(
+            output=output,
+            usage_details=(
+                {"input": usage.prompt_tokens, "output": usage.completion_tokens, "total": usage.total_tokens}
+                if usage
+                else None
+            ),
+            metadata={"finish_reason": getattr(choice, "finish_reason", None), "reasoning": getattr(message, "reasoning", None)},
+        )
+        return response
+
+
 def _strip_code_fence(text: str) -> str:
     """Some models wrap JSON output in ```json ... ``` even when asked not
     to - strip that before parsing rather than failing the whole pass."""
@@ -81,7 +126,8 @@ def call_llm_findings(system_prompt: str, user_prompt: str) -> list[dict[str, An
         return None
 
     try:
-        response = _client().chat.completions.create(
+        response = _chat(
+            "analyze-diff",
             model=settings.groq_model,
             messages=[
                 {"role": "system", "content": system_prompt},
@@ -128,20 +174,33 @@ def _run_tool_call(
     deprecated `function`-role message, and including it here would send
     the API a field its schema for this role doesn't define."""
     name = call.function.name
-    try:
-        arguments = json.loads(call.function.arguments or "{}")
-    except json.JSONDecodeError:
-        result: Any = {"error": f"could not parse arguments for tool {name!r}"}
-    else:
-        implementation = tool_implementations.get(name)
-        if implementation is None:
-            result = {"error": f"unknown tool {name!r}"}
+    # The span wraps every outcome, not just successful runs: a model asking
+    # for a tool that isn't wired in (no checkout) or sending bad arguments
+    # is exactly what someone reading the trace needs to see.
+    with langfuse.start_as_current_observation(
+        as_type="tool",
+        name=f"run-{name}",
+        input=call.function.arguments or "{}",
+        metadata={"tool_call_id": call.id},
+    ) as tool_span:
+        try:
+            arguments = json.loads(call.function.arguments or "{}")
+        except json.JSONDecodeError:
+            result: Any = {"error": f"could not parse arguments for tool {name!r}"}
         else:
-            try:
-                result = implementation(**arguments)
-            except Exception as exc:  # tool implementations must never crash the loop
-                logger.warning("tool %r raised", name, exc_info=True)
-                result = {"error": f"{name} raised: {exc}"}
+            tool_span.update(input=arguments)
+            implementation = tool_implementations.get(name)
+            if implementation is None:
+                result = {"error": f"unknown tool {name!r}"}
+            else:
+                try:
+                    result = implementation(**arguments)
+                except Exception as exc:  # tool implementations must never crash the loop
+                    logger.warning("tool %r raised", name, exc_info=True)
+                    result = {"error": f"{name} raised: {exc}"}
+        if isinstance(result, dict) and "error" in result:
+            tool_span.update(level="ERROR", status_message=str(result["error"]))
+        tool_span.update(output=result)
 
     return {
         "role": "tool",
@@ -179,7 +238,8 @@ def call_llm_with_tools(
 
     try:
         for _ in range(max_rounds):
-            response = _client().chat.completions.create(
+            response = _chat(
+                "investigate-with-tools",
                 model=settings.groq_model,
                 messages=messages,
                 tools=tools,
@@ -247,7 +307,8 @@ def call_llm_text(system_prompt: str, user_prompt: str) -> str | None:
     if not llm_enabled():
         return None
     try:
-        response = _client().chat.completions.create(
+        response = _chat(
+            "explain-diagnosis",
             model=settings.groq_model,
             messages=[
                 {"role": "system", "content": system_prompt},

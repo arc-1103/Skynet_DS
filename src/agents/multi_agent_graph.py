@@ -37,6 +37,7 @@ from src.agents.drift_agent import make_drift_agent
 from src.agents.ml_debugger_agent import make_ml_debugger_agent
 from src.agents.security_agent import make_security_agent
 from src.agents.synthesizer import run_synthesizer_agent
+from src.core.tracing import langfuse, propagate_attributes
 from src.schemas.graph import AgentNode, AgentState
 from src.schemas.pr import PRPayload
 
@@ -63,11 +64,21 @@ def _isolate(name: str, node: AgentNode, output_key: str, empty: object = None) 
     otherwise throw away every branch's completed work."""
 
     def wrapped(state: AgentState) -> dict:
-        try:
-            return node(state)
-        except Exception as exc:  # noqa: BLE001 - isolating an unknown failure on purpose
-            logger.exception("%s node failed", name)
-            return {output_key: empty, "errors": [f"{name}: {exc}"]}
+        # input is just the file list, not the state: the state carries the
+        # whole diff, which the nested generations already record.
+        with langfuse.start_as_current_observation(
+            as_type="agent",
+            name=f"{name}-agent",
+            input={"changed_files": [f.filename for f in state["pr_payload"].changed_files]},
+        ) as span:
+            try:
+                result = node(state)
+            except Exception as exc:  # noqa: BLE001 - isolating an unknown failure on purpose
+                logger.exception("%s node failed", name)
+                span.update(level="ERROR", status_message=str(exc))
+                result = {output_key: empty, "errors": [f"{name}: {exc}"]}
+            span.update(output=result)
+            return result
 
     return wrapped
 
@@ -137,4 +148,37 @@ def run_pr_review(pr: PRPayload, repo_path: str | Path | None = None) -> AgentSt
     bug: at runtime this is exactly an AgentState dict, since that's the
     schema StateGraph(AgentState) was built with."""
     app = build_multi_agent_graph(repo_path)
-    return cast(AgentState, app.invoke(initial_state(pr)))
+    with (
+        langfuse.start_as_current_observation(
+            as_type="span",
+            name="review-pull-request",
+            input={
+                "repo": pr.repo_full_name,
+                "pr_number": pr.pr_id,
+                "title": pr.title,
+                "changed_files": [f.filename for f in pr.changed_files],
+            },
+        ) as root,
+        propagate_attributes(
+            trace_name="review-pull-request",
+            session_id=f"{pr.repo_full_name}#{pr.pr_id}",
+            user_id=pr.author,
+            tags=["pr-review"],
+            metadata={"head_sha": pr.commit_sha, "has_checkout": str(repo_path is not None)},
+        ),
+    ):
+        state = cast(AgentState, app.invoke(initial_state(pr)))
+        review = state.get("final_review")
+        # The full review lives on the synthesize-agent span; the root shows the verdict at a glance.
+        root.update(
+            output=(
+                {
+                    "overall_passed": review.overall_passed,
+                    "labels": [label.value for label in review.labels],
+                    "summary": review.markdown_summary,
+                }
+                if review
+                else {"errors": state.get("errors", [])}
+            )
+        )
+        return state

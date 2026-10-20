@@ -1,0 +1,29 @@
+# Local convenience for building/running the image before pushing it to a
+# cloud registry - not required by any cloud container platform, which
+# take the Dockerfile directly. No other services (no Redis/Postgres): the
+# app is one process, an in-process asyncio worker queue and a SQLite
+# store, per src/worker/dispatcher.py and src/memory/sqlite_store.py.
+services:
+  webhook:
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      # data/prs (PR review cache) and data/repos (git clone cache) -
+      # settings.pr_cache_dir and repo_client.py's clone_or_checkout
+      # default. Without this, both reset on every container restart.
+      - skynet-data:/app/data
+
+  # Read by PrometheusAdapter (set PROMETHEUS_URL=http://prometheus:9090).
+  # Scrape targets live in prometheus.yml.
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+
+volumes:
+  skynet-data:

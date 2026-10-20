@@ -27,9 +27,8 @@ import os
 from pathlib import Path
 
 from langfuse import get_client
-from langfuse.langchain import CallbackHandler
 
-from src.agents.multi_agent_graph import build_multi_agent_graph, initial_state
+from src.agents.multi_agent_graph import run_pr_review
 from src.schemas.graph import AgentState
 from src.schemas.pr import PRPayload
 
@@ -40,29 +39,23 @@ def langfuse_is_configured() -> bool:
     actually land in the UI."""
     if not (os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY")):
         return False
-    return get_client().auth_check()
+    try:
+        return get_client().auth_check()
+    except Exception:  # a rejected key raises (401) rather than returning False
+        return False
 
 
 def run_traced_pr_review(pr: PRPayload, repo_path: str | Path | None = None) -> AgentState:
-    """Runs the same graph as agents.multi_agent_graph.run_pr_review, with
-    a Langfuse CallbackHandler attached so LangGraph's per-node
-    start/end events (security, architecture, ml_debugger, drift running
-    concurrently, then synthesize) are traced.
+    """Runs agents.multi_agent_graph.run_pr_review, which is itself traced
+    (root span, one agent span per node, a generation per Groq call - see
+    src/core/tracing.py), then flushes so a short-lived script keeps its trace.
 
     Safe to call with no Langfuse credentials configured: the client logs
     an auth warning and disables itself rather than raising, so the graph
     still runs and returns a normal AgentState - you just won't see
     anything in the Langfuse UI until LANGFUSE_PUBLIC_KEY/
     LANGFUSE_SECRET_KEY (and LANGFUSE_HOST, if self-hosting) are set."""
-    handler = CallbackHandler()
-    app = build_multi_agent_graph(repo_path)
-    result = app.invoke(
-        initial_state(pr),
-        config={
-            "callbacks": [handler],
-            "run_name": f"pr-review-{pr.repo_full_name}#{pr.pr_id}",
-        },
-    )
+    result = run_pr_review(pr, repo_path)
     # Langfuse batches events on a background thread; flush before the
     # process can exit so a short-lived demo script doesn't drop the trace.
     get_client().flush()
