@@ -100,6 +100,16 @@ npm run start:dev      # dev, with reload
 npm run build && npm run start:prod   # production build
 ```
 
+It shows live data when the Python side has produced any (latest PR review in
+`data/prs/`, latest monitoring-sweep drift/root cause in `data/monitoring/`;
+override the location with `SKYNET_DATA_DIR`), and labels any panel still on
+sample data in the footer. The sweep needs `PROMETHEUS_URL` +
+`MLCOP_MONITOR_INTERVAL_SECONDS` > 0 and a model exporting
+`mlcop_feature_value`.
+
+With `docker compose up --build` the dashboard is on `localhost:3000`, reading
+the same `skynet-data` volume the webhook service writes.
+
 ## 6. Knowledge graph (`graphify-out/`)
 
 ```bash
