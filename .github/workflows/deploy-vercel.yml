@@ -1,0 +1,42 @@
+name: Deploy demo-ui to Vercel
+
+# Deploys only the NestJS dashboard (demo-ui/). The Python service + Celery/Redis
+# worker need a long-running host; point the dashboard at it via SKYNET_API_URL /
+# SKYNET_API_TOKEN set in the Vercel project settings (not here).
+
+on:
+  push:
+    branches: [main]
+    paths: ["demo-ui/**", ".github/workflows/deploy-vercel.yml"]
+  pull_request:
+    paths: ["demo-ui/**"]
+
+env:
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: demo-ui
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: demo-ui/package-lock.json
+
+      - run: npm i -g vercel@latest
+
+      - name: Pull Vercel config
+        run: vercel pull --yes --environment=${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }} --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build
+        run: vercel build ${{ github.ref == 'refs/heads/main' && '--prod' || '' }} --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy
+        run: vercel deploy --prebuilt ${{ github.ref == 'refs/heads/main' && '--prod' || '' }} --token=${{ secrets.VERCEL_TOKEN }}

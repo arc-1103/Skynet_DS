@@ -21,10 +21,13 @@ Key vars from `.env.example` / `src/core/config.py`:
 | Var | Needed for |
 |---|---|
 | `GITHUB_TOKEN` | Pulling PR metadata/diffs (`debug`/`compare` with a real repo, the PR-review pipeline, demo scripts) |
-| `GROQ_API_KEY` | LLM-backed analysis pass in the specialist agents; unset = regex-only (fails open) |
+| `GROQ_API_KEY` | LLM-backed analysis pass in the specialist agents; unset = regex-only (fails open). On Groq's free `on_demand` tier output is capped at 1000 tokens/min, so reviews are throttled (requests are capped at 900 tokens) - a paid tier lifts this |
 | `TELEMETRY_BACKEND` | `fake` (default, canned data) or `wandb` (needs `WANDB_API_KEY`) |
 | `PROMETHEUS_URL` | Drift checks / monitoring sweep; unset = skipped |
 | `GITHUB_WEBHOOK_SECRET` | Verifying inbound GitHub webhook signatures |
+| `RESULTS_API_TOKEN` | Bearer token for the read-only `/results` API. **Set it before exposing the service**: unset, PR findings are readable by anyone |
+| `MLCOP_OPEN_FIX_PRS` | `off` (default) / `dry-run` / `on`: automated fix PRs, see section 3 |
+| `CELERY_BROKER_URL` | Optional durable queue (Celery + Redis); unset = in-process asyncio queue |
 | `SLACK_WEBHOOK_URL` | Drift/deploy-regression alerts; unset = log only |
 
 ## 1. Core CLI (`src/cli.py`)
@@ -43,8 +46,7 @@ python -m src.cli drift --model-id fraud-clf      # needs PROMETHEUS_URL
 ## 2. Tests
 
 ```bash
-python -m pytest tests/           # core product
-pytest demo/tests/                # demo layer (separate rootdir/conftest)
+python -m pytest tests/ demo/tests/   # core product + demo layer (~3 min)
 python -m evals.run_eval          # labeled-incident precision/latency gate
 ```
 
@@ -81,6 +83,60 @@ starts only the long-running services. All Python images run as a non-root
 user; webhook, dashboard and Prometheus have healthchecks, and the dashboard
 waits for the webhook to be healthy. `skynet-data` persists `data/prs`,
 `data/monitoring` and `data/repos`; `prometheus-data` persists the TSDB.
+
+### Automated fix PRs (optional, off by default)
+
+After reviewing a PR, the agent can open a second PR that applies its
+*mechanical* fixes: `yaml.load(x)` -> `yaml.safe_load(x)`, `verify=False` ->
+`verify=True`, bare `except:` -> `except Exception:`. Only those deterministic
+checks produce an exact patch; `eval`, `shell=True`, pickle and every LLM
+suggestion are comment-only, never auto-applied.
+
+```bash
+MLCOP_OPEN_FIX_PRS=dry-run   # log the planned patch, write nothing - try this first
+MLCOP_OPEN_FIX_PRS=on        # needs GITHUB_TOKEN with contents:write + pull_requests:write
+```
+
+The fix PR targets the author's PR branch (never the default branch), is never
+merged for you, and only applies a line that still matches what was reviewed.
+Fork PRs and the agent's own fix PRs are skipped. A new push to the PR closes
+its older fix PRs ("Superseded") and deletes their branches, then opens a fresh
+one for the new commit; only `skynet/fix-pr<N>-*` branches are ever touched.
+Commits and the PR are authored by whoever owns the token - an app identity is
+still an open decision.
+
+#### Running it autonomously (GitHub -> Skynet_DS -> fix PR, no human step)
+
+Verified live on a public scratch repo: opening a PR and then pushing a second
+commit produced a fix PR, then closed it as superseded and opened a new one.
+
+1. **Token** (`GITHUB_TOKEN`): a fine-grained token on the target repo with
+   *Contents: Read and write* and *Pull requests: Read and write*. Without
+   Contents write, GitHub returns 403 on the first branch creation.
+2. **Run the service** with fix PRs on, and lock the results API first:
+
+   ```bash
+   # .env: RESULTS_API_TOKEN=<long random>, GITHUB_WEBHOOK_SECRET=<secret>, MLCOP_OPEN_FIX_PRS=on
+   uvicorn src.api.webhooks:app --port 8000      # or: docker compose up --build
+   ```
+
+3. **Make it reachable.** GitHub must be able to POST to it; locally use a
+   tunnel (`ngrok http 8000`, Cloudflare Tunnel or Tailscale Funnel). A free
+   ngrok URL changes every restart, so update the webhook each time.
+4. **Register the webhook** (repo Settings -> Webhooks -> Add): payload URL
+   `https://<tunnel>/webhooks/github`, content type `application/json`, the same
+   secret as `GITHUB_WEBHOOK_SECRET`, and only the **Pull requests** event
+   (add *Deployment statuses* for the post-deploy check). Creating it through
+   the API needs a *Webhooks: Read and write* token permission.
+5. **Check it**: `curl https://<tunnel>/healthz` returns `{"status":"ok"}`;
+   `/results/*` and an unsigned webhook both return 401 from outside. Then open
+   a PR containing `yaml.load(f)` or `verify=False`: a `skynet/fix-pr<N>-<sha>`
+   PR appears within a few minutes. Review it, merge it into the PR branch, or
+   close it.
+
+An unsigned or wrongly signed webhook gets 401. Run the service in the
+foreground or under a supervisor: a closed terminal stops the tunnel and the
+service, and GitHub then retries and gives up.
 
 ### Durable queue (Celery + Redis, optional)
 
@@ -202,7 +258,7 @@ It shows live data when the Python side has produced any (latest PR review,
 latest monitoring-sweep drift/root cause), and labels any panel still on
 sample data. The sweep needs `PROMETHEUS_URL` +
 `MLCOP_MONITOR_INTERVAL_SECONDS` > 0 and a model exporting
-`mlcop_feature_value` - see "Exporting features" below.
+`mlcop_feature_value` - see "Exporting features" above.
 
 Live data comes over HTTP from the webhook service's read-only results API
 when `SKYNET_API_URL` is set, otherwise from its data dir on disk:

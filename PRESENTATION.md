@@ -79,7 +79,41 @@ Four specialists run **in parallel**, then fan in to one synthesizer:
 | **Drift** | Statistical drift in any data files the PR changes |
 
 - Each branch is **isolated**: one failing agent can't crash the review
-- Result is posted back as a GitHub review with inline suggestions
+- The review is cached for the dashboard; the demo layer can post it as a GitHub review (`--post`), and the live service acts on it by **opening fix PRs** (next slides)
+
+---
+
+## Autonomous Fix PRs: GitHub → Skynet_DS → PR
+
+A PR is opened or pushed. With no human step, Skynet_DS:
+
+1. Receives GitHub's **signed webhook** (forged signature → 401)
+2. Runs the 4-agent review
+3. Opens a **second PR** that applies the mechanical fixes, into the author's PR branch (never `main`, never merged for you)
+
+Fixes are **exact one-line patches from deterministic checks only**:
+`yaml.load(x)` → `yaml.safe_load(x)` · `verify=False` → `verify=True` · bare `except:` → `except Exception:`
+
+`eval`, `shell=True`, pickle and **every LLM suggestion stay comment-only**: nothing the model improvised is ever committed.
+
+<!-- Verified live on a public scratch repo: opened a PR, got a fix PR; pushed a
+     second commit, the old fix PR was closed as "Superseded", its branch deleted,
+     and a new one opened. The fix PR's own review did not spawn a fix of the fix. -->
+
+---
+
+## Fix PR Safeguards
+
+- **Off by default** (`MLCOP_OPEN_FIX_PRS`): `dry-run` logs the patch and writes nothing
+- A line is patched only if it **still matches exactly what was reviewed**
+- **New push → old fix PR closed** ("Superseded") and its branch deleted; only the agent's own `skynet/fix-pr<N>-*` branches are ever touched
+- Skips **fork PRs** (no write access), closed PRs, and **its own fix PRs** (no fix-of-a-fix loop)
+- A half-written branch is **cleaned up** on failure; a fix-PR error never fails the review
+- Results API locked behind a bearer token before the service is exposed
+
+<!-- Open decision: commits are authored by whoever owns the token. A GitHub App
+     with only contents + pull-requests write is the long-term answer. PRD NG3
+     says "no auto-remediation in v1"; this is opt-in and human-merged. -->
 
 ---
 
@@ -142,7 +176,7 @@ Why a surrogate? It sees columns **jointly**, so it discounts features that only
 
 ## Three Ways to See the Output
 
-1. **GitHub PR review**: summary comment with severity badges + inline suggested fixes
+1. **GitHub**: the **fix PR** the agent opens (live), plus an optional PR review comment with severity badges and inline suggestions (demo layer, `--post`)
 2. **Dashboard** (NestJS + vanilla JS): verdict & KPIs, findings table, drift + attribution panels, clearly labelled **live vs. sample** data
 3. **Observability**: **Langfuse** traces show the four agents running concurrently; **Evidently** HTML drift dashboards; **Prometheus** metrics
 
@@ -152,7 +186,7 @@ Why a surrogate? It sees columns **jointly**, so it discounts features that only
 
 ## Quality & Evaluation
 
-- **375 automated tests** across agents, drift methods, API, worker, and integrations
+- **463 automated tests** across agents, drift methods, API, worker, fix PRs, Celery path and integrations
 - **Labeled-incident eval** (`python -m evals.run_eval`)
   - Gate: **top-1 cause precision ≥ 60%**
   - Gate: **time-to-root-cause < 2 minutes**
@@ -172,7 +206,9 @@ The LLM has tools, so its tool surface is treated as an attack surface:
 - **Repo-path containment**: tools can't read outside the PR checkout
 - **Commit SHA validation** on webhook payloads before they reach a file path
 - Git credentials passed via **header**, never embedded in URLs
-- GitHub webhook **signature verification**
+- GitHub webhook **signature verification** (verified live: forged signature → 401)
+- Read-only `/results` API behind a **bearer token** (401 without it, tested from outside)
+- Fix PRs: exact-match patches only, never to the default branch, never merged automatically
 
 ---
 
@@ -186,7 +222,7 @@ The LLM has tools, so its tool surface is treated as an attack surface:
 | Code analysis | Tree-sitter, Python `ast`, unidiff, PyGithub |
 | Observability | Langfuse, Prometheus, Evidently, Weights & Biases |
 | Frontend | NestJS + vanilla HTML/CSS/JS |
-| Deploy | Docker Compose (webhook, dashboard, prometheus, cli, demo) |
+| Deploy | Docker Compose (webhook, dashboard, prometheus, cli, demo; optional redis + worker) |
 
 ---
 
@@ -199,15 +235,20 @@ python -m src.cli compare --runs run-baseline,run-004 --metric eval_accuracy
 python -m evals.run_eval                            # precision & latency gate
 ```
 
-1. Open a PR with an ML anti-pattern + a changed CSV
-2. Watch the 4 agents run in Langfuse
-3. See the review on GitHub and the drift + SHAP cause on the dashboard
+1. Open a PR containing `yaml.load(f)` / `verify=False` / a bare `except:`
+2. Within minutes a `skynet/fix-pr…` PR appears on its own
+3. Push another commit: the old fix PR closes as superseded and a new one opens
+4. Watch the 4 agents in Langfuse; see the drift + SHAP cause on the dashboard
 
 ---
 
 ## Limitations & Roadmap
 
 **Today**
+- Needs a reachable URL: a tunnel for local use (free ngrok URLs change each restart); not yet deployed anywhere permanent
+- Groq's free tier caps output at 1000 tokens/min, so the LLM pass is throttled; reviews still complete on the regex checks (the pass fails open)
+- Fix PRs cover only 3 mechanical patterns; commits are authored by the token's owner, not an app identity
+- Celery + Redis path is unit-tested but untested against a real Redis
 - Exporter library exists (`observe()`), but no real model publishes through it yet; the dashboard shows labelled sample data until one does
 - Eval set is small and entirely synthetic; the config-vs-real-cause misses are untuned
 
@@ -215,7 +256,8 @@ python -m evals.run_eval                            # precision & latency gate
 - Capture real incidents to make the precision gate meaningful
 - Confirmed-verdict feedback so the history prior learns from right answers only
 - Down-weight incidental config tweaks (the 4 eval misses)
-- Diagnosis only by design: no auto-rollback or auto-retraining in v1
+- Move to a GitHub App identity; record fix-PR outcomes for an activity panel on the dashboard
+- No auto-rollback or auto-retraining in v1; fix PRs are opt-in and human-merged
 
 ---
 

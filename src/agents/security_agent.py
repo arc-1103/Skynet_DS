@@ -28,6 +28,7 @@ where no checkout is available (e.g. this module's own tests)."""
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,7 +37,7 @@ from src.agents.llm_client import call_llm_with_tools
 from src.agents.llm_findings import collect_llm_findings
 from src.agents.security_agent_tools import TOOL_SCHEMAS, make_tool_implementations
 from src.schemas.graph import AgentNode, AgentState
-from src.schemas.review import ReviewFinding, Severity
+from src.schemas.review import LineFix, ReviewFinding, Severity
 
 
 @dataclass(frozen=True)
@@ -46,6 +47,23 @@ class _Check:
     severity: Severity
     description: str
     suggestion: str
+    # line text -> patched line, or None when no safe mechanical fix exists
+    # for this particular line. Only checks whose fix can't change meaning
+    # beyond what the finding already asks for get one.
+    fix: Callable[[str], str | None] | None = None
+
+
+_YAML_LOAD = re.compile(r"\byaml\.load\(")
+
+
+def _fix_yaml_load(line: str) -> str | None:
+    # yaml.safe_load() takes no Loader argument, so a call that passes any
+    # Loader (even an unsafe one) can't just be renamed - it would raise.
+    return None if "Loader" in line else _YAML_LOAD.sub("yaml.safe_load(", line)
+
+
+def _fix_verify_false(line: str) -> str | None:
+    return re.sub(r"(verify\s*=\s*)False", r"\g<1>True", line)
 
 
 _CHECKS: tuple[_Check, ...] = (
@@ -84,6 +102,7 @@ _CHECKS: tuple[_Check, ...] = (
         "yaml.load() without an explicit safe Loader can construct "
         "arbitrary Python objects from the YAML content.",
         "Use yaml.safe_load(), or pass Loader=yaml.SafeLoader explicitly.",
+        _fix_yaml_load,
     ),
     _Check(
         re.compile(r"subprocess\.\w+\([^)]*shell\s*=\s*True"),
@@ -108,6 +127,7 @@ _CHECKS: tuple[_Check, ...] = (
         "verify=False accepts any certificate, exposing the connection to "
         "man-in-the-middle interception.",
         "Remove verify=False and fix the underlying certificate problem instead.",
+        _fix_verify_false,
     ),
     _Check(
         re.compile(
@@ -175,6 +195,7 @@ def make_security_agent(repo_path: str | Path | None = None) -> AgentNode:
             for line_no, text in iter_added_lines(changed_file.patch):
                 for check in _CHECKS:
                     if check.pattern.search(text):
+                        patched = check.fix(text) if check.fix else None
                         findings.append(
                             ReviewFinding(
                                 file_path=changed_file.filename,
@@ -183,6 +204,7 @@ def make_security_agent(repo_path: str | Path | None = None) -> AgentNode:
                                 severity=check.severity,
                                 description=check.description,
                                 suggestion=check.suggestion,
+                                fix=LineFix(old_line=text, new_line=patched) if patched and patched != text else None,
                             )
                         )
         findings.extend(

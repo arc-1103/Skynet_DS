@@ -33,6 +33,10 @@ class Settings:
     # (src/worker/celery_app.py) and survive a restart of the API process;
     # unset -> the in-process asyncio queue (src/worker/dispatcher.py).
     celery_broker_url: str | None = None
+    # Automated fix PRs (github_integration/fix_pr.py): "off" (default),
+    # "dry-run" (plan and log the patch, write nothing) or "on". "on" needs a
+    # token that can push a branch and open a PR - see that module.
+    fix_pr_mode: str = "off"
     # Local directory PRs are cached to after being pulled from GitHub.
     pr_cache_dir: str = "data/prs"
     # Where the monitoring sweep leaves its latest drift report / root cause
@@ -85,6 +89,7 @@ class Settings:
         load_dotenv()
         return cls(
             memory_db_path=os.environ.get("MLCOP_MEMORY_DB_PATH") or cls.memory_db_path,
+            fix_pr_mode=_parse_fix_pr_mode(os.environ.get("MLCOP_OPEN_FIX_PRS", "")),
             celery_broker_url=os.environ.get("CELERY_BROKER_URL") or None,
             github_webhook_secret=os.environ.get("GITHUB_WEBHOOK_SECRET"),
             github_token=os.environ.get("GITHUB_TOKEN"),
@@ -105,6 +110,12 @@ class Settings:
             github_repo=os.environ.get("GITHUB_REPO") or None,
             repo_models=_parse_pairs(os.environ.get("MLCOP_REPO_MODELS", "")),
         )
+
+
+def _parse_fix_pr_mode(raw: str) -> str:
+    """Anything unrecognized is "off": a typo must not switch on writes to GitHub."""
+    value = raw.strip().lower()
+    return {"1": "on", "true": "on", "yes": "on", "on": "on", "dry-run": "dry-run", "dry_run": "dry-run"}.get(value, "off")
 
 
 def _parse_list(raw: str) -> tuple[str, ...]:

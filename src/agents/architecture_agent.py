@@ -17,7 +17,7 @@ from src.agents.diff_utils import dedupe_findings, iter_added_lines
 from src.agents.llm_client import call_llm_findings
 from src.agents.llm_findings import collect_llm_findings
 from src.schemas.graph import AgentState
-from src.schemas.review import ReviewFinding, Severity
+from src.schemas.review import LineFix, ReviewFinding, Severity
 
 _BARE_EXCEPT = re.compile(r"^\s*except\s*:\s*$")
 _PRINT_CALL = re.compile(r"^\s*print\s*\(")
@@ -78,6 +78,8 @@ def run_architecture_agent(state: AgentState) -> dict:
                         "making failures invisible.",
                         suggestion="Catch a specific exception type (or at least "
                         "Exception) and log or re-raise it.",
+                        # _BARE_EXCEPT only matches a line that is just `except:`
+                        fix=LineFix(old_line=text, new_line=text.replace("except:", "except Exception:", 1)),
                     )
                 )
             elif _PRINT_CALL.match(text):

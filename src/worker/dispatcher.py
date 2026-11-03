@@ -37,7 +37,8 @@ class DelayedTaskQueue:
         a plain kwargs dict are.
         """
         if settings.celery_broker_url:
-            from src.worker.celery_app import TASKS  # lazy: pulls in celery and every job module
+            # lazy: pulls in celery and every job module
+            from src.worker.celery_app import TASKS
 
             if func.__name__ not in TASKS:
                 raise ValueError(f"{func.__name__} has no Celery task in worker/celery_app.py")
